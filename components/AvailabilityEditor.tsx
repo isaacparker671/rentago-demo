@@ -13,9 +13,14 @@ type Props = {
 
   // Availability days for renter view (owner-chosen). If empty/undefined => available anytime.
   availabilityDays?: string[] | null;
+  bookedDays?: string[];
+  lockedDays?: string[];
+  selectedDays?: string[];
 
   mode: Mode;
   title?: string;
+  subtitle?: string;
+  primaryLabel?: string;
 
   // ✅ Support BOTH names so we don't break pages:
   onConfirm?: (days: string[]) => void;
@@ -48,6 +53,7 @@ export default function AvailabilityEditor({
   availabilityDays,
   mode,
   title,
+  subtitle,
   onConfirm,
   onSave,
 }: Props) {
@@ -117,6 +123,9 @@ export default function AvailabilityEditor({
             <div className="text-sm font-extrabold text-slate-900">
               {mode === "owner" ? "Set available dates" : "Pick rental dates"}
             </div>
+            {subtitle ? (
+              <div className="mt-1 text-xs font-semibold text-slate-600">{subtitle}</div>
+            ) : null}
             <div className="mt-1 text-xs font-semibold text-slate-600">
               {title ? <span className="font-extrabold text-slate-900">{title}</span> : null}
               {title ? " — " : null}

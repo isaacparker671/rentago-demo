@@ -338,12 +338,13 @@ export default function ItemDetailPage() {
   const isOwner = !!viewerId && viewerId === item.owner_id;
 
   const images = (item.image_urls ?? []).filter(Boolean);
-  const hasVideo = !!item.video_url;
+  const videoUrl = item?.video_url ?? null;
+  const hasVideo = !!videoUrl;
   const mediaCount = images.length + (hasVideo ? 1 : 0);
 
   function mediaAt(idx: number) {
     if (idx < images.length) return { kind: "image" as const, url: images[idx] };
-    if (hasVideo && idx === images.length) return { kind: "video" as const, url: item.video_url! };
+    if (hasVideo && idx === images.length && videoUrl) return { kind: "video" as const, url: videoUrl };
     return null;
   }
 

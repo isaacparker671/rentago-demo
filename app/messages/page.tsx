@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { cx, rCard, rCardPad, rH1, rSub } from "../../components/ui/ui";
+import { isConversationUnread, readHiddenChats } from "../../lib/messageState";
 
 type ConversationRow = {
   id: string;
@@ -24,21 +25,6 @@ type ItemMini = {
   id: string;
   title: string;
 };
-
-function hiddenChatsKey(userId: string) {
-  return `rentago:hidden_chats:${userId}`;
-}
-
-function readHiddenChats(userId: string) {
-  if (typeof window === "undefined") return new Set<string>();
-  try {
-    const raw = window.localStorage.getItem(hiddenChatsKey(userId));
-    const parsed = raw ? (JSON.parse(raw) as string[]) : [];
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set<string>();
-  }
-}
 
 function niceDate(iso: string | null) {
   if (!iso) return "";
@@ -60,7 +46,9 @@ export default function MessagesPage() {
   const [convos, setConvos] = useState<ConversationRow[]>([]);
   const [profiles, setProfiles] = useState<Record<string, ProfileMini>>({});
   const [items, setItems] = useState<Record<string, ItemMini>>({});
+  const [unreadConvoIds, setUnreadConvoIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
+  const [refreshTick, setRefreshTick] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -82,6 +70,13 @@ export default function MessagesPage() {
       const hidden = readHiddenChats(uid);
       const list = ((rows as ConversationRow[]) || []).filter((row) => !hidden.has(row.id));
       setConvos(list);
+      setUnreadConvoIds(
+        new Set(
+          list
+            .filter((c) => isConversationUnread(uid, c.id, c.last_message_at))
+            .map((c) => c.id)
+        )
+      );
 
       const otherIds = Array.from(
         new Set(list.map((c) => (c.user_a === uid ? c.user_b : c.user_a)).filter(Boolean))
@@ -112,7 +107,23 @@ export default function MessagesPage() {
     }
 
     load();
-  }, [router]);
+  }, [router, refreshTick]);
+
+  useEffect(() => {
+    if (!viewerId) return;
+    const channel = supabase
+      .channel(`messages-list-${viewerId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "conversations" },
+        () => setRefreshTick((x) => x + 1)
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [viewerId]);
 
   const list = useMemo(() => {
     if (!viewerId) return [];
@@ -171,6 +182,7 @@ export default function MessagesPage() {
               const avatar = profile?.avatar_url || null;
               const subtitle = item?.title ? `Re: ${item.title}` : "Direct message";
               const when = niceDate(c.last_message_at);
+              const isUnread = unreadConvoIds.has(c.id);
 
               return (
                 <div
@@ -216,7 +228,10 @@ export default function MessagesPage() {
                         <div className="truncate text-sm font-extrabold text-slate-900">
                           {name}
                         </div>
-                        <div className="text-xs font-semibold text-slate-500">{when}</div>
+                        <div className="flex items-center gap-2">
+                          {isUnread ? <span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> : null}
+                          <div className="text-xs font-semibold text-slate-500">{when}</div>
+                        </div>
                       </div>
 
                       <div className="mt-1 truncate text-xs font-semibold text-slate-600">

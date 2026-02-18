@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { hiddenChatsKey, markConversationRead, readHiddenChats } from "../../../lib/messageState";
 
 type Conversation = {
   id: string;
@@ -40,21 +41,6 @@ type Transaction = {
   seller_id: string;
 };
 
-function hiddenChatsKey(userId: string) {
-  return `rentago:hidden_chats:${userId}`;
-}
-
-function readHiddenChats(userId: string) {
-  if (typeof window === "undefined") return new Set<string>();
-  try {
-    const raw = window.localStorage.getItem(hiddenChatsKey(userId));
-    const parsed = raw ? (JSON.parse(raw) as string[]) : [];
-    return new Set(Array.isArray(parsed) ? parsed : []);
-  } catch {
-    return new Set<string>();
-  }
-}
-
 function hideChatForUser(userId: string, conversationId: string) {
   if (typeof window === "undefined") return;
   const hidden = readHiddenChats(userId);
@@ -81,7 +67,7 @@ export default function ChatPage() {
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  async function reloadMessages() {
+  const reloadMessages = useCallback(async () => {
     if (!convoId) return;
     const { data: msgData } = await supabase
       .from("messages")
@@ -89,8 +75,14 @@ export default function ChatPage() {
       .eq("conversation_id", convoId)
       .order("created_at", { ascending: true });
 
-    setMsgs((msgData as Msg[]) || []);
-  }
+    const list = (msgData as Msg[]) || [];
+    setMsgs(list);
+
+    const lastAt = list[list.length - 1]?.created_at;
+    if (viewerId && convoId && lastAt) {
+      markConversationRead(viewerId, convoId, lastAt);
+    }
+  }, [convoId, viewerId]);
 
   async function reloadTx(conversationId: string) {
     const { data } = await supabase
@@ -169,7 +161,30 @@ export default function ChatPage() {
     }
 
     init();
-  }, [convoId, router]);
+  }, [convoId, reloadMessages, router]);
+
+  useEffect(() => {
+    if (!convoId) return;
+    const channel = supabase
+      .channel(`chat-live-${convoId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `conversation_id=eq.${convoId}`,
+        },
+        () => {
+          void reloadMessages();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [convoId, reloadMessages]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -467,16 +482,16 @@ export default function ChatPage() {
               className="mt-3 inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
             >
               <span className="h-7 w-7 overflow-hidden rounded-full border border-slate-200 bg-white flex items-center justify-center">
-                {otherUser.avatar_url ? (
+                {otherUser?.avatar_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={otherUser.avatar_url} alt={otherUser.name || "User"} className="h-full w-full object-cover" />
+                  <img src={otherUser.avatar_url} alt={otherUser?.name || "User"} className="h-full w-full object-cover" />
                 ) : (
                   <span className="text-[11px] font-bold text-slate-600">
-                    {(otherUser.name?.[0] || "U").toUpperCase()}
+                    {(otherUser?.name?.[0] || "U").toUpperCase()}
                   </span>
                 )}
               </span>
-              View {otherUser.name || "User"} profile
+              View {otherUser?.name || "User"} profile
             </Link>
           ) : null}
         </div>

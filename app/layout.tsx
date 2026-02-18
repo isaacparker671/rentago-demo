@@ -1,9 +1,6 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import BottomNav from "./components/BottomNav";
-import { Inter } from "next/font/google";
-
-const inter = Inter({ subsets: ["latin"], display: "swap" });
 
 export const metadata: Metadata = {
   title: "Rentago",
@@ -13,7 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
+      <body>
         {/* Premium background (soft blobs + gradient like your waitlist) */}
         <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
           <div className="absolute -top-32 -left-40 h-[720px] w-[720px] rounded-full bg-sky-200/55 blur-3xl" />
