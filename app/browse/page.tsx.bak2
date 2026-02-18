@@ -45,7 +45,7 @@ function statusLabel(status: Item["status"]) {
 }
 
 function statusClasses(status: Item["status"]) {
-  if (status === "sold") return "bg-black/85 text-white border-white/10";
+  if (status === "sold") return "bg-black/80 text-white border-white/10";
   if (status === "rented") return "bg-amber-600/90 text-white border-white/10";
   if (status === "reserved") return "bg-slate-900/70 text-white border-white/10";
   return "bg-emerald-600/90 text-white border-white/10";
@@ -62,7 +62,7 @@ function Chip({ label, onRemove }: { label: string; onRemove: () => void }) {
     <button
       type="button"
       onClick={onRemove}
-      className="inline-flex items-center gap-2 rounded-full border border-slate-200/70 bg-white/70 px-3 py-1.5 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white active:scale-[0.99]"
+      className="inline-flex items-center gap-2 rounded-full border border-slate-200/70 bg-white/70 px-3 py-1 text-xs font-semibold text-slate-900 shadow-sm backdrop-blur active:scale-[0.99]"
     >
       {label}
       <span className="text-slate-400">✕</span>
@@ -86,7 +86,7 @@ function TogglePill({
       className={cx(
         "rounded-full px-4 py-2 text-xs font-extrabold shadow-sm transition active:scale-[0.99]",
         active
-          ? "bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+          ? "bg-sky-600 text-white"
           : "border border-slate-200/70 bg-white/70 text-slate-900 hover:bg-white"
       )}
     >
@@ -121,7 +121,7 @@ function SkeletonCard() {
   return (
     <div className="overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur">
       <div className="aspect-[16/11] w-full animate-pulse bg-slate-100" />
-      <div className="flex flex-1 flex-col p-4">
+      <div className="p-4">
         <div className="h-4 w-2/3 animate-pulse rounded bg-slate-100" />
         <div className="mt-2 h-3 w-1/2 animate-pulse rounded bg-slate-100" />
         <div className="mt-4 h-10 w-full animate-pulse rounded-2xl bg-slate-100" />
@@ -151,14 +151,15 @@ export default function BrowsePage() {
 
   const [categoryFilters, setCategoryFilters] = useState<CategoryOpt[]>([]);
   const [conditionFilters, setConditionFilters] = useState<Array<Item["condition"]>>([]);
-  const [shuffleSeed] = useState(() => Math.floor(Math.random() * 1_000_000_000));
 
   useEffect(() => {
     async function loadBase() {
       setBaseLoading(true);
       const { data } = await supabase
         .from("items")
-        .select("id,title,price,price_type,listing_type,status,zip,city,county,category,condition,image_urls,created_at")
+        .select(
+          "id,title,price,price_type,listing_type,status,zip,city,county,category,condition,image_urls,created_at"
+        )
         .neq("status", "sold")
         .order("created_at", { ascending: false });
 
@@ -166,34 +167,6 @@ export default function BrowsePage() {
       setBaseLoading(false);
     }
     loadBase();
-  }, []);
-
-  useEffect(() => {
-    async function loadDefaultLocation() {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const uid = sessionData.session?.user?.id;
-      if (!uid) return;
-
-      const { data } = await supabase
-        .from("profiles")
-        .select("zip,county")
-        .eq("id", uid)
-        .maybeSingle();
-
-      const profileZip = (data?.zip ?? "").toString().trim();
-      const profileCounty = (data?.county ?? "").toString().trim();
-
-      if (profileZip && /^\d{5}$/.test(profileZip)) {
-        setLocationMode("zip");
-        setLocationValue(profileZip);
-        return;
-      }
-      if (profileCounty) {
-        setLocationMode("county");
-        setLocationValue(profileCounty);
-      }
-    }
-    loadDefaultLocation();
   }, []);
 
   useEffect(() => {
@@ -305,18 +278,6 @@ export default function BrowsePage() {
     conditionFilters,
   ]);
 
-  const randomizedList = useMemo(() => {
-    function score(id: string) {
-      let h = shuffleSeed;
-      const s = `${id}:${shuffleSeed}`;
-      for (let i = 0; i < s.length; i++) {
-        h = (h * 31 + s.charCodeAt(i)) >>> 0;
-      }
-      return h;
-    }
-    return [...filteredList].sort((a, b) => score(a.id) - score(b.id));
-  }, [filteredList, shuffleSeed]);
-
   const activeChips = useMemo(() => {
     const chips: Array<{ key: string; label: string; clear: () => void }> = [];
 
@@ -390,49 +351,26 @@ export default function BrowsePage() {
 
   return (
     <main className="pb-24">
-      {/* Top Header (Apple-ish) */}
-      <div className="sticky top-0 z-40 -mx-4 border-b border-slate-200/60 bg-white/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <Link href="/browse" className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-lg shadow-slate-900/20">
-              <span className="text-sm font-extrabold">R</span>
-            </div>
-            <div className="text-lg font-extrabold tracking-tight text-slate-900">Rentago</div>
-          </Link>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setFiltersOpen(true)}
-              className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-2 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white active:scale-[0.99]"
-            >
-              Filters
-            </button>
-            <Link
-              href="/post"
-              className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-extrabold text-white shadow-lg shadow-slate-900/20 active:scale-[0.99]"
-            >
-              + Post
-            </Link>
-          </div>
-        </div>
-      </div>
-
       {/* Hero */}
-      <section className="mt-4 rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur-xl">
-        <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
+      <section className="rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur-xl">
+        <div className="inline-flex items-center gap-2 rounded-full bg-sky-600/10 px-3 py-1 text-xs font-extrabold text-sky-700">
+          Rentago Marketplace
+          <span className="h-2 w-2 rounded-full bg-emerald-500" />
+        </div>
+
+        <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
           {heroTitle}
         </h1>
 
-        <p className="mt-2 max-w-[70ch] text-sm font-semibold text-slate-600">
-          Search listings, refine by location and category, then message before you finalize.
+        <p className="mt-2 max-w-[65ch] text-sm font-semibold text-slate-600">
+          Search listings, refine by location and category, then message sellers before you finalize.
         </p>
 
         <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto]">
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search items: drill, camera, tools..."
+            placeholder="Search: drill, camera, tools, zip, city..."
             className="w-full rounded-2xl border border-slate-200/70 bg-white/80 px-4 py-3 text-sm font-semibold text-slate-900 placeholder:text-slate-400 outline-none shadow-sm backdrop-blur focus:border-sky-400"
           />
           <button
@@ -469,7 +407,7 @@ export default function BrowsePage() {
             ))}
             <button
               onClick={clearAll}
-              className="rounded-full border border-slate-200/70 bg-white/70 px-3 py-1.5 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white"
+              className="rounded-full border border-slate-200/70 bg-white/70 px-3 py-1 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white"
             >
               Clear all
             </button>
@@ -483,7 +421,7 @@ export default function BrowsePage() {
       </section>
 
       {/* Grid */}
-      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
+      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {loading ? (
           <>
             <SkeletonCard />
@@ -491,7 +429,7 @@ export default function BrowsePage() {
             <SkeletonCard />
           </>
         ) : (
-          randomizedList.map((it) => {
+          filteredList.map((it) => {
             const hero = (it.image_urls ?? []).filter(Boolean)[0] || null;
 
             const locationLine = `${it.city ? it.city + " • " : ""}${it.zip} • ${it.county}${
@@ -502,9 +440,9 @@ export default function BrowsePage() {
               <Link
                 key={it.id}
                 href={`/items/${it.id}`}
-                className="group flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.99]"
+                className="group block overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.99]"
               >
-                <div className="relative aspect-[16/11] w-full flex-none bg-slate-50">
+                <div className="relative aspect-[16/11] w-full bg-slate-50">
                   {hero ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={hero} alt={it.title} className="h-full w-full object-cover" />
@@ -548,8 +486,8 @@ export default function BrowsePage() {
                   </div>
                 </div>
 
-                <div className="flex flex-1 flex-col p-4">
-                  <div className="mt-auto flex items-center justify-between gap-3">
+                <div className="p-4">
+                  <div className="flex items-center justify-between gap-3">
                     <div className="truncate text-xs font-semibold text-slate-600">
                       {it.category} • {conditionLabel(it.condition)}
                     </div>
@@ -564,12 +502,11 @@ export default function BrowsePage() {
         )}
       </section>
 
-      {/* Drawer (smaller, less “full screen”) */}
+      {/* Drawer */}
       {filtersOpen ? (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/35" onClick={() => setFiltersOpen(false)} />
-
-          <div className="absolute bottom-3 left-3 right-3 mx-auto max-w-2xl rounded-3xl border border-slate-200 bg-white shadow-2xl">
+          <div className="absolute bottom-0 left-0 right-0 rounded-t-3xl border-t border-slate-200 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
               <div>
                 <div className="text-base font-extrabold text-slate-900">Filters</div>
@@ -591,7 +528,7 @@ export default function BrowsePage() {
               </div>
             </div>
 
-            <div className="max-h-[62vh] overflow-y-auto px-5 py-4 space-y-4">
+            <div className="max-h-[70vh] overflow-y-auto px-5 py-4 space-y-4">
               <div className="rounded-3xl border border-slate-200 bg-white p-4">
                 <div className="text-sm font-extrabold text-slate-900">Location</div>
 
@@ -688,16 +625,15 @@ export default function BrowsePage() {
               </div>
 
               <div className="rounded-3xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-extrabold text-slate-900">Categories</div>
-                <div className="mt-2 text-xs font-semibold text-slate-500">Pick as many as you want</div>
-                <div className="mt-3 space-y-1">
+                <div className="text-sm font-extrabold text-slate-900">Category</div>
+                <div className="mt-2">
                   {CATEGORY_OPTIONS.map((c) => (
                     <CheckboxRow
                       key={c}
                       label={c}
-                      checked={categoryFilters.includes(c)}
+                      checked={categoryFilters.includes(c as CategoryOpt)}
                       onChange={(v) =>
-                        setCategoryFilters((prev) => (v ? [...prev, c] : prev.filter((x) => x !== c)))
+                        setCategoryFilters((prev) => (v ? [...prev, c as CategoryOpt] : prev.filter((x) => x !== c)))
                       }
                     />
                   ))}
@@ -706,7 +642,7 @@ export default function BrowsePage() {
 
               <div className="rounded-3xl border border-slate-200 bg-white p-4">
                 <div className="text-sm font-extrabold text-slate-900">Condition</div>
-                <div className="mt-3 space-y-1">
+                <div className="mt-2">
                   {CONDITION_OPTIONS.map((c) => (
                     <CheckboxRow
                       key={c.value}
@@ -720,15 +656,7 @@ export default function BrowsePage() {
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-slate-200 bg-white p-4">
-                <div className="text-sm font-extrabold text-slate-900">Quick reset</div>
-                <button
-                  onClick={clearAll}
-                  className="mt-3 w-full rounded-2xl bg-slate-900 px-4 py-3 text-sm font-extrabold text-white shadow-lg shadow-slate-900/20"
-                >
-                  Clear all filters
-                </button>
-              </div>
+              <div className="pb-2" />
             </div>
           </div>
         </div>

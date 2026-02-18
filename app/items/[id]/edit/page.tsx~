@@ -1,0 +1,560 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { supabase } from "../../../../lib/supabaseClient";
+import { uploadItemFile } from "../../../../lib/uploadItemMedia";
+import AvailabilityEditor from "../../../../components/AvailabilityEditor";
+
+type Item = {
+  id: string;
+  owner_id: string;
+  title: string;
+  description: string;
+  listing_type: "rent" | "sell";
+  price: number;
+  price_type: "hour" | "day" | "week";
+  category: string;
+  condition: "brand_new" | "used" | "old";
+  zip: string;
+  county: string;
+  status: "available" | "reserved" | "rented" | "sold";
+  image_urls: string[] | null;
+  video_url: string | null;
+};
+
+const CATEGORIES = ["Tools", "Camera", "Electronics", "Yard", "Home", "Other"] as const;
+
+export default function EditItemPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  const [item, setItem] = useState<Item | null>(null);
+
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [listingType, setListingType] = useState<Item["listing_type"]>("rent");
+  const [price, setPrice] = useState<string>("");
+  const [priceType, setPriceType] = useState<Item["price_type"]>("day");
+  const [category, setCategory] = useState<string>("Tools");
+  const [condition, setCondition] = useState<Item["condition"]>("used");
+  const [zip, setZip] = useState("");
+  const [county, setCounty] = useState("");
+  const [status, setStatus] = useState<Item["status"]>("available");
+
+  // media
+  const [images, setImages] = useState<string[]>([]);
+  const [videoUrl, setVideoUrl] = useState<string | null>(null);
+  const [newImages, setNewImages] = useState<File[]>([]);
+  const [newVideo, setNewVideo] = useState<File | null>(null);
+  const [uploadingMedia, setUploadingMedia] = useState(false);
+
+  // availability (rent only)
+  const [availabilityOpen, setAvailabilityOpen] = useState(false);
+  const [availableDays, setAvailableDays] = useState<string[]>([]);
+  const [bookedDays, setBookedDays] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!id) return;
+
+    async function load() {
+      setLoading(true);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const uid = sessionData.session?.user.id ?? null;
+      if (!uid) {
+        router.push("/login");
+        return;
+      }
+      setViewerId(uid);
+
+      const { data, error } = await supabase
+        .from("items")
+        .select(
+          "id,owner_id,title,description,listing_type,price,price_type,category,condition,zip,county,status,image_urls,video_url"
+        )
+        .eq("id", id)
+        .single();
+
+      if (error || !data) {
+        setMsg(error?.message || "Item not found.");
+        setLoading(false);
+        return;
+      }
+
+      const it = data as Item;
+      setItem(it);
+
+      if (it.owner_id !== uid) {
+        setMsg("You can only edit your own listing.");
+        setLoading(false);
+        return;
+      }
+
+      setTitle(it.title);
+      setDescription(it.description);
+      setListingType(it.listing_type);
+      setPrice(String(it.price));
+      setPriceType(it.price_type);
+      setCategory(it.category || "Tools");
+      setCondition(it.condition);
+      setZip(it.zip);
+      setCounty(it.county);
+      setStatus(it.status);
+
+      setImages((it.image_urls ?? []).filter(Boolean));
+      setVideoUrl(it.video_url ?? null);
+
+      // load availability + booked days (finalized)
+      if (it.listing_type === "rent") {
+        const { data: av } = await supabase
+          .from("item_availability_days")
+          .select("day")
+          .eq("item_id", it.id);
+
+        const days = ((av as any[]) || []).map((r) => String(r.day)).filter(Boolean).sort();
+        setAvailableDays(days);
+
+        const { data: tx } = await supabase
+          .from("transactions")
+          .select("rental_dates")
+          .eq("item_id", it.id)
+          .eq("type", "rent")
+          .eq("status", "finalized");
+
+        const booked = new Set<string>();
+        ((tx as any[]) || []).forEach((t) => {
+          const arr = (t?.rental_dates || []) as any[];
+          arr.forEach((d) => booked.add(String(d)));
+        });
+        setBookedDays(Array.from(booked).sort());
+      } else {
+        setAvailableDays([]);
+        setBookedDays([]);
+      }
+
+      setLoading(false);
+    }
+
+    load();
+  }, [id, router]);
+
+  const remainingImageSlots = useMemo(() => Math.max(0, 5 - images.length), [images.length]);
+
+  function validate() {
+    if (!title.trim()) return "Title is required.";
+    if (!description.trim()) return "Description is required.";
+    const p = Number(price);
+    if (!Number.isFinite(p) || p <= 0) return "Price must be a valid number > 0.";
+    if (!zip.trim()) return "ZIP is required.";
+    if (!county.trim()) return "County is required.";
+    return null;
+  }
+
+  async function saveMediaIfNeeded(itemId: string) {
+    if (!newImages.length && !newVideo) return;
+
+    if (images.length + newImages.length > 5) {
+      throw new Error(`You can only have up to 5 photos. Remove some first.`);
+    }
+
+    setUploadingMedia(true);
+
+    let nextImages = [...images];
+    let nextVideoUrl = videoUrl;
+
+    for (const f of newImages) {
+      if (!f.type.startsWith("image/")) continue;
+      const url = await uploadItemFile(itemId, f);
+      nextImages.push(url);
+    }
+
+    if (newVideo) {
+      if (!newVideo.type.startsWith("video/")) throw new Error("Video must be a video file.");
+      const url = await uploadItemFile(itemId, newVideo);
+      nextVideoUrl = url;
+    }
+
+    const { error } = await supabase.from("items").update({ image_urls: nextImages, video_url: nextVideoUrl }).eq("id", itemId);
+
+    setUploadingMedia(false);
+
+    if (error) throw new Error(error.message);
+
+    setImages(nextImages);
+    setVideoUrl(nextVideoUrl);
+    setNewImages([]);
+    setNewVideo(null);
+  }
+
+  async function saveAvailabilityIfNeeded(itemId: string) {
+    if (listingType !== "rent") return;
+
+    // Replace all availability rows. Empty means "available anytime".
+    const { error: delErr } = await supabase.from("item_availability_days").delete().eq("item_id", itemId);
+    if (delErr) throw new Error(delErr.message);
+
+    if (!availableDays.length) return;
+
+    const rows = availableDays.map((day) => ({ item_id: itemId, day, owner_id: viewerId }));
+    const { error: insErr } = await supabase.from("item_availability_days").insert(rows);
+    if (insErr) throw new Error(insErr.message);
+  }
+
+  async function save() {
+    setMsg(null);
+
+    const err = validate();
+    if (err) {
+      setMsg(err);
+      return;
+    }
+
+    if (!item || !viewerId || item.owner_id !== viewerId) {
+      setMsg("Not allowed.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      await saveMediaIfNeeded(item.id);
+      await saveAvailabilityIfNeeded(item.id);
+
+      const payload: Partial<Item> = {
+        title: title.trim(),
+        description: description.trim(),
+        listing_type: listingType,
+        price: Number(price),
+        price_type: listingType === "sell" ? "day" : priceType,
+        category,
+        condition,
+        zip: zip.trim(),
+        county: county.trim(),
+        status,
+      };
+
+      const { error } = await supabase.from("items").update(payload).eq("id", item.id);
+      if (error) throw new Error(error.message);
+
+      setSaving(false);
+      router.push(`/items/${item.id}`);
+    } catch (e: any) {
+      setMsg(e?.message || "Failed to save.");
+      setSaving(false);
+      setUploadingMedia(false);
+    }
+  }
+
+  async function removePhoto(url: string) {
+    setMsg(null);
+    if (!item) return;
+
+    const next = images.filter((x) => x !== url);
+    setImages(next);
+
+    const { error } = await supabase.from("items").update({ image_urls: next }).eq("id", item.id);
+    if (error) setMsg(error.message);
+  }
+
+  async function removeVideo() {
+    setMsg(null);
+    if (!item) return;
+
+    setVideoUrl(null);
+    const { error } = await supabase.from("items").update({ video_url: null }).eq("id", item.id);
+    if (error) setMsg(error.message);
+  }
+
+  async function removeListing() {
+    if (!item || !viewerId || item.owner_id !== viewerId) return;
+    const ok = confirm("Delete this listing? This cannot be undone.");
+    if (!ok) return;
+
+    const { error } = await supabase.from("items").delete().eq("id", item.id);
+    if (error) {
+      setMsg(error.message);
+      return;
+    }
+    router.push("/profile");
+  }
+
+  if (loading) {
+    return (
+      <main className="px-4 pb-24 pt-6">
+        <p className="text-sm text-slate-600">Loading…</p>
+      </main>
+    );
+  }
+
+  return (
+    <main className="px-4 pb-24 pt-6">
+      <div className="flex items-center justify-between">
+        <Link href={item ? `/items/${item.id}` : "/browse"} className="text-sm font-semibold text-sky-600">
+          ← Back
+        </Link>
+
+        {item ? (
+          <button onClick={removeListing} className="text-sm font-semibold text-rose-600">
+            Delete
+          </button>
+        ) : null}
+      </div>
+
+      <h1 className="mt-3 text-xl font-extrabold tracking-tight">Edit Listing</h1>
+
+      {/* Availability (rent only, optional) */}
+      {listingType === "rent" ? (
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-sm font-extrabold text-slate-900">Availability (optional)</div>
+          <div className="mt-1 text-xs font-semibold text-slate-600">
+            Pick available days. Pick none = available anytime. Booked days are locked (red).
+          </div>
+
+          <AvailabilityEditor
+            open={availabilityOpen}
+            onClose={() => setAvailabilityOpen(false)}
+            onConfirm={(dates) => {
+              setAvailableDays(dates);
+              setAvailabilityOpen(false);
+            }}
+            initialSelected={availableDays}
+            bookedDates={bookedDays}
+            title="Edit availability"
+            subtitle="Selected days = available. Empty = available anytime."
+          />
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setAvailabilityOpen(true)}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+            >
+              Edit availability dates
+            </button>
+
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-extrabold text-slate-700">
+              {availableDays.length ? `${availableDays.length} day(s) selected` : "Available anytime"}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Media section */}
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="text-sm font-extrabold text-slate-900">Photos & Video</h2>
+        <p className="mt-1 text-xs text-slate-600">Up to 5 photos and 1 video.</p>
+
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          {images.length === 0 ? (
+            <p className="col-span-2 text-sm text-slate-600">No photos yet.</p>
+          ) : (
+            images.map((url) => (
+              <div key={url} className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+                <img src={url} alt="" className="h-[120px] w-full object-contain" />
+                <button
+                  type="button"
+                  onClick={() => removePhoto(url)}
+                  className="w-full border-t border-slate-200 bg-white py-2 text-xs font-semibold text-rose-600"
+                >
+                  Remove
+                </button>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="mt-3">
+          <div className="text-sm font-semibold text-slate-900">Add photos</div>
+          <p className="mt-1 text-xs text-slate-600">Remaining slots: {remainingImageSlots}</p>
+          <input
+            type="file"
+            accept="image/*"
+            multiple
+            disabled={remainingImageSlots === 0}
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []).slice(0, remainingImageSlots);
+              setNewImages(files);
+            }}
+            className="mt-2 block w-full text-sm"
+          />
+          {newImages.length ? <p className="mt-1 text-xs text-slate-600">{newImages.length} photo(s) selected</p> : null}
+        </div>
+
+        <div className="mt-4">
+          <div className="text-sm font-semibold text-slate-900">Video</div>
+          {videoUrl ? (
+            <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
+              <video src={videoUrl} controls className="h-[200px] w-full object-contain" />
+              <button
+                type="button"
+                onClick={removeVideo}
+                className="w-full border-t border-slate-200 bg-white py-2 text-xs font-semibold text-rose-600"
+              >
+                Remove video
+              </button>
+            </div>
+          ) : (
+            <p className="mt-1 text-sm text-slate-600">No video yet.</p>
+          )}
+        </div>
+
+        <div className="mt-3">
+          <div className="text-sm font-semibold text-slate-900">{videoUrl ? "Replace video" : "Add video"}</div>
+          <input
+            type="file"
+            accept="video/*"
+            onChange={(e) => setNewVideo(e.target.files?.[0] ?? null)}
+            className="mt-2 block w-full text-sm"
+          />
+          {newVideo ? <p className="mt-1 text-xs text-slate-600">Selected: {newVideo.name}</p> : null}
+        </div>
+      </div>
+
+      {/* Core fields */}
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="text-sm font-semibold text-slate-900">Listing type</div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => setListingType("rent")}
+            className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+              listingType === "rent" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-900"
+            }`}
+          >
+            Rent
+          </button>
+          <button
+            type="button"
+            onClick={() => setListingType("sell")}
+            className={`rounded-xl px-4 py-3 text-sm font-semibold ${
+              listingType === "sell" ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-900"
+            }`}
+          >
+            Sell
+          </button>
+        </div>
+
+        <div className="mt-4 text-sm font-semibold text-slate-900">Title</div>
+        <input
+          className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+
+        <div className="mt-4 text-sm font-semibold text-slate-900">Description</div>
+        <textarea
+          className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
+          rows={4}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Category</div>
+            <select
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+            >
+              {CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <div className="text-sm font-semibold text-slate-900">Condition</div>
+            <select
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+              value={condition}
+              onChange={(e) => setCondition(e.target.value as any)}
+            >
+              <option value="brand_new">Brand New</option>
+              <option value="used">Used</option>
+              <option value="old">Old</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">{listingType === "sell" ? "Sale price" : "Rental price"}</div>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              inputMode="decimal"
+            />
+          </div>
+
+          {listingType === "rent" ? (
+            <div>
+              <div className="text-sm font-semibold text-slate-900">Price type</div>
+              <select
+                className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+                value={priceType}
+                onChange={(e) => setPriceType(e.target.value as any)}
+              >
+                <option value="hour">Per hour</option>
+                <option value="day">Per day</option>
+                <option value="week">Per week</option>
+              </select>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <div className="text-sm font-semibold text-slate-900">ZIP</div>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+              value={zip}
+              onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-slate-900">County</div>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+              value={county}
+              onChange={(e) => setCounty(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4 text-sm font-semibold text-slate-900">Status</div>
+        <select
+          className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black"
+          value={status}
+          onChange={(e) => setStatus(e.target.value as any)}
+        >
+          <option value="available">Available</option>
+          <option value="reserved">Reserved</option>
+          <option value="rented">Rented</option>
+          <option value="sold">Sold</option>
+        </select>
+
+        {msg ? <p className="mt-3 text-sm text-rose-600">{msg}</p> : null}
+
+        <button
+          onClick={save}
+          disabled={saving || uploadingMedia}
+          className="mt-4 w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
+        >
+          {uploadingMedia ? "Uploading media…" : saving ? "Saving…" : "Save Changes"}
+        </button>
+      </div>
+    </main>
+  );
+}

@@ -1,66 +1,47 @@
 import "./globals.css";
-import Link from "next/link";
+import type { Metadata } from "next";
+import BottomNav from "./components/BottomNav";
+import { Inter } from "next/font/google";
 
-export const metadata = {
+const inter = Inter({ subsets: ["latin"], display: "swap" });
+
+export const metadata: Metadata = {
   title: "Rentago",
-  description: "Rent or sell items locally.",
+  description: "Rent and sell items locally.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="bg-white text-slate-900">
-        {/* Top Bar */}
-        <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/80 backdrop-blur">
-          <div className="mx-auto flex max-w-md items-center justify-between px-4 py-3">
-            <Link href="/" className="text-2xl font-extrabold tracking-tight">
-              <span className="bg-gradient-to-r from-sky-500 to-cyan-300 bg-clip-text text-transparent">
-                Rentago
-              </span>
-            </Link>
+      <body className={inter.className}>
+        {/* Premium background (soft blobs + gradient like your waitlist) */}
+        <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+          <div className="absolute -top-32 -left-40 h-[720px] w-[720px] rounded-full bg-sky-200/55 blur-3xl" />
+          <div className="absolute top-0 -right-40 h-[760px] w-[760px] rounded-full bg-indigo-200/45 blur-3xl" />
+          <div className="absolute bottom-[-260px] left-1/2 h-[860px] w-[860px] -translate-x-1/2 rounded-full bg-sky-100/70 blur-3xl" />
+          <div className="absolute inset-0 bg-gradient-to-b from-white/70 via-slate-50/55 to-slate-50/90" />
+        </div>
 
+        {/* Glass header */}
+        <header className="sticky top-0 z-30 border-b border-slate-200/60 bg-white/70 backdrop-blur-xl">
+          <div className="mx-auto flex h-14 w-full max-w-[1100px] items-center justify-between px-4">
             <div className="flex items-center gap-2">
-              <Link
-                href="/login"
-                className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-900 hover:bg-slate-50 active:scale-[0.99]"
-              >
-                Log in
-              </Link>
-              <Link
-                href="/signup"
-                className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:opacity-95 active:scale-[0.99]"
-              >
-                Sign up
-              </Link>
+              <div className="h-8 w-8 rounded-2xl bg-sky-600 shadow-sm" />
+              <div className="text-base font-extrabold tracking-tight text-slate-900">
+                Rentago
+              </div>
             </div>
+            <div className="text-xs font-semibold text-slate-500">Demo</div>
           </div>
         </header>
 
-        {/* Page Content */}
-        <div className="mx-auto max-w-md">{children}</div>
+        {/* Content */}
+        <main className="mx-auto w-full max-w-[1100px] px-4 pb-28 pt-6">
+          {children}
+        </main>
 
-        {/* Bottom Nav */}
-        <nav className="fixed bottom-0 left-0 right-0 z-20 border-t border-slate-200 bg-white/90 backdrop-blur">
-          <div className="mx-auto grid max-w-md grid-cols-4 px-2 py-2 text-xs text-slate-600">
-            <NavItem href="/browse" label="Browse" />
-            <NavItem href="/post" label="Post" />
-            <NavItem href="/messages" label="Messages" />
-            <NavItem href="/profile" label="Profile" />
-          </div>
-        </nav>
+        <BottomNav />
       </body>
     </html>
-  );
-}
-
-function NavItem({ href, label }: { href: string; label: string }) {
-  return (
-    <Link
-      href={href}
-      className="flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 font-semibold hover:bg-slate-50 active:scale-[0.99]"
-    >
-      <div className="h-1.5 w-6 rounded-full bg-gradient-to-r from-sky-500 to-cyan-300 opacity-80" />
-      <div>{label}</div>
-    </Link>
   );
 }

@@ -36,7 +36,7 @@ export default function LoginPage() {
 
         <form onSubmit={onSubmit} className="mt-4 space-y-3">
           <input
-            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400"
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
             placeholder="Email"
             type="email"
             autoComplete="email"
@@ -45,7 +45,7 @@ export default function LoginPage() {
             required
           />
           <input
-            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400"
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
             placeholder="Password"
             type="password"
             autoComplete="current-password"

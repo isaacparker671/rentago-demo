@@ -1,0 +1,203 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  initialDates?: string[]; // YYYY-MM-DD
+  onSave: (dates: string[]) => void;
+  title?: string;
+};
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function toISODate(d: Date) {
+  const y = d.getFullYear();
+  const m = pad2(d.getMonth() + 1);
+  const day = pad2(d.getDate());
+  return `${y}-${m}-${day}`;
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+
+function addMonths(d: Date, delta: number) {
+  return new Date(d.getFullYear(), d.getMonth() + delta, 1);
+}
+
+function monthLabel(d: Date) {
+  return d.toLocaleString(undefined, { month: "long", year: "numeric" });
+}
+
+function daysInMonthGrid(month: Date) {
+  const start = startOfMonth(month);
+  const end = endOfMonth(month);
+  const startWeekday = start.getDay(); // 0 Sun
+  const totalDays = end.getDate();
+
+  // Build a grid array of length 42 (6 weeks)
+  const cells: Array<{ date: Date | null; iso: string | null }> = [];
+  for (let i = 0; i < startWeekday; i++) cells.push({ date: null, iso: null });
+
+  for (let day = 1; day <= totalDays; day++) {
+    const d = new Date(month.getFullYear(), month.getMonth(), day);
+    cells.push({ date: d, iso: toISODate(d) });
+  }
+
+  while (cells.length < 42) cells.push({ date: null, iso: null });
+  return cells;
+}
+
+export default function AvailabilityEditor({
+  open,
+  onClose,
+  initialDates = [],
+  onSave,
+  title = "Set available dates",
+}: Props) {
+  // IMPORTANT: if closed, render NOTHING so it cannot block clicks.
+  if (!open) return null;
+
+  const initialKey = useMemo(() => (initialDates || []).slice().sort().join("|"), [initialDates]);
+  const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()));
+  const [selected, setSelected] = useState<string[]>([]);
+
+  // Load initial dates once per open (stable key prevents loops)
+  useEffect(() => {
+    setSelected((initialDates || []).slice());
+    // Reset month view when opening
+    setMonth(startOfMonth(new Date()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialKey, open]);
+
+  function toggle(iso: string) {
+    setSelected((prev) => (prev.includes(iso) ? prev.filter((x) => x !== iso) : [...prev, iso]));
+  }
+
+  function clearAll() {
+    setSelected([]);
+  }
+
+  function saveAndClose() {
+    const out = selected.slice().sort();
+    onSave(out);
+    onClose();
+  }
+
+  const grid = useMemo(() => daysInMonthGrid(month), [month]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  return (
+    <div className="fixed inset-0 z-[99999] flex items-center justify-center bg-black/60 px-4 py-6">
+      {/* Backdrop click closes */}
+      <button
+        aria-label="Close availability editor"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+        style={{ background: "transparent" }}
+      />
+
+      <div className="relative w-full max-w-md rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <div className="text-base font-extrabold text-slate-900">{title}</div>
+            <div className="text-xs font-semibold text-slate-500">
+              Click days to toggle. If you save with none selected, it means “available anytime”.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="px-5 py-4">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setMonth((m) => addMonths(m, -1))}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+            >
+              ←
+            </button>
+
+            <div className="text-sm font-extrabold text-slate-900">{monthLabel(month)}</div>
+
+            <button
+              type="button"
+              onClick={() => setMonth((m) => addMonths(m, 1))}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+            >
+              →
+            </button>
+          </div>
+
+          <div className="mt-4 grid grid-cols-7 gap-2 text-center text-[11px] font-extrabold text-slate-500">
+            {["S", "M", "T", "W", "T", "F", "S"].map((x, i) => (
+              <div key={`${x}-${i}`}>{x}</div>
+            ))}
+          </div>
+
+          <div className="mt-2 grid grid-cols-7 gap-2">
+            {grid.map((cell, idx) => {
+              if (!cell.date || !cell.iso) {
+                return <div key={idx} className="h-9" />;
+              }
+
+              const active = selectedSet.has(cell.iso);
+
+              return (
+                <button
+                  key={cell.iso}
+                  type="button"
+                  onClick={() => toggle(cell.iso)}
+                  className={[
+                    "h-9 rounded-xl text-sm font-extrabold transition active:scale-[0.98]",
+                    active
+                      ? "bg-emerald-600 text-white shadow-sm"
+                      : "border border-slate-200 bg-white text-slate-900 hover:bg-slate-50",
+                  ].join(" ")}
+                >
+                  {cell.date.getDate()}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={clearAll}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-extrabold text-slate-900 hover:bg-slate-50"
+            >
+              Clear (Anytime)
+            </button>
+
+            <button
+              type="button"
+              onClick={saveAndClose}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-extrabold text-white hover:bg-slate-800"
+            >
+              Save dates
+            </button>
+          </div>
+
+          <div className="mt-3 text-xs font-semibold text-slate-600">
+            Selected: <span className="text-slate-900">{selected.length}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

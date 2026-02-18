@@ -1,0 +1,340 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { supabase } from "../../../lib/supabaseClient";
+import Link from "next/link";
+import { useParams, useRouter } from "next/navigation";
+
+type Item = {
+  id: string;
+  owner_id: string;
+  title: string;
+  description: string;
+  listing_type: "rent" | "sell";
+  price: number;
+  price_type: "hour" | "day" | "week";
+  category: string;
+  condition: "brand_new" | "used" | "old";
+  zip: string;
+  county: string;
+  status: "available" | "reserved" | "rented" | "sold";
+  image_urls?: string[] | null;
+  video_url?: string | null;
+};
+
+type Owner = { id: string; name: string | null; bio: string | null };
+
+function cx(...xs: Array<string | false | null | undefined>) {
+  return xs.filter(Boolean).join(" ");
+}
+
+function conditionLabel(c: Item["condition"]) {
+  if (c === "brand_new") return "Brand new";
+  if (c === "used") return "Used";
+  return "Old";
+}
+
+function statusLabel(s: Item["status"]) {
+  if (s === "available") return "Available";
+  if (s === "reserved") return "Reserved";
+  if (s === "rented") return "Rented";
+  return "Sold";
+}
+
+function statusPill(s: Item["status"]) {
+  if (s === "sold") return "bg-black/85 text-white border-white/10";
+  if (s === "rented") return "bg-amber-600/90 text-white border-white/10";
+  if (s === "reserved") return "bg-slate-900/70 text-white border-white/10";
+  return "bg-emerald-600/90 text-white border-white/10";
+}
+
+export default function ItemDetailPage() {
+  const router = useRouter();
+  const params = useParams<{ id: string }>();
+  const id = params?.id;
+
+  const [item, setItem] = useState<Item | null>(null);
+  const [owner, setOwner] = useState<Owner | null>(null);
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [mediaIndex, setMediaIndex] = useState(0);
+
+  useEffect(() => {
+    if (!id) return;
+
+    async function load() {
+      setLoading(true);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const vid = sessionData.session?.user.id ?? null;
+      setViewerId(vid);
+
+      const { data, error } = await supabase.from("items").select("*").eq("id", id).single();
+
+      if (error || !data) {
+        setItem(null);
+        setOwner(null);
+        setLoading(false);
+        return;
+      }
+
+      const typedItem = data as Item;
+      setItem(typedItem);
+
+      const { data: ownerData } = await supabase
+        .from("profiles")
+        .select("id, name, bio")
+        .eq("id", typedItem.owner_id)
+        .single();
+
+      setOwner((ownerData as Owner) ?? null);
+      setLoading(false);
+    }
+
+    load();
+  }, [id]);
+
+  async function messageOwner() {
+    if (!viewerId) {
+      router.push("/login");
+      return;
+    }
+    if (!item) return;
+
+    const userA = viewerId;
+    const userB = item.owner_id;
+
+    const { data: existing } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("item_id", item.id)
+      .or(`and(user_a.eq.${userA},user_b.eq.${userB}),and(user_a.eq.${userB},user_b.eq.${userA})`)
+      .maybeSingle();
+
+    if (existing?.id) {
+      router.push(`/messages/${existing.id}`);
+      return;
+    }
+
+    const { data: created, error } = await supabase
+      .from("conversations")
+      .insert({
+        item_id: item.id,
+        user_a: userA,
+        user_b: userB,
+        last_message_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (error || !created?.id) return;
+    router.push(`/messages/${created.id}`);
+  }
+
+  const isOwner = !!viewerId && !!item && viewerId === item.owner_id;
+
+  const images = useMemo(() => (item?.image_urls ?? []).filter(Boolean), [item?.image_urls]);
+  const hasVideo = !!item?.video_url;
+  const mediaCount = images.length + (hasVideo ? 1 : 0);
+
+  function mediaAt(idx: number) {
+    if (!item) return null;
+    if (idx < images.length) return { kind: "image" as const, url: images[idx] };
+    if (hasVideo && idx === images.length) return { kind: "video" as const, url: item.video_url! };
+    return null;
+  }
+
+  const active = mediaAt(Math.min(mediaIndex, Math.max(0, mediaCount - 1)));
+
+  if (!id) {
+    return (
+      <main className="px-4 pb-24 pt-6">
+        <p className="text-sm text-slate-600">Loading…</p>
+      </main>
+    );
+  }
+
+  if (loading) {
+    return (
+      <main className="px-4 pb-24 pt-6">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+          <div className="h-6 w-56 animate-pulse rounded bg-slate-100" />
+          <div className="mt-4 h-[360px] w-full animate-pulse rounded-3xl bg-slate-100" />
+          <div className="mt-4 h-40 w-full animate-pulse rounded-3xl bg-slate-100" />
+        </div>
+      </main>
+    );
+  }
+
+  if (!item) {
+    return (
+      <main className="px-4 pb-24 pt-6">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+          <div className="text-xl font-extrabold text-slate-900">Item not found</div>
+          <Link href="/browse" className="mt-4 inline-block text-sm font-semibold text-sky-600">
+            Back to Browse
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="px-4 pb-24 pt-6">
+      <div className="mx-auto max-w-3xl">
+        <div className="flex items-center justify-between">
+          <button
+            onClick={() => router.back()}
+            className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-2 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white"
+          >
+            ← Back
+          </button>
+
+          <div className="flex items-center gap-2">
+            <span className={cx("rounded-full border px-3 py-1 text-xs font-extrabold shadow-sm", statusPill(item.status))}>
+              {statusLabel(item.status)}
+            </span>
+            <span className="rounded-full border border-slate-200/70 bg-white/70 px-3 py-1 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur">
+              {item.listing_type === "rent" ? "Rent" : "Buy"}
+            </span>
+          </div>
+        </div>
+
+        {/* Media hero */}
+        {mediaCount > 0 ? (
+          <section className="mt-4 overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur">
+            <div className="relative aspect-[16/11] w-full bg-slate-100">
+              {active?.kind === "image" ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={active.url} alt={item.title} className="h-full w-full object-cover" />
+              ) : active?.kind === "video" ? (
+                <video className="h-full w-full object-cover" controls playsInline src={active.url} />
+              ) : null}
+
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-black/0 to-black/0" />
+
+              <div className="absolute bottom-4 left-4 right-4 flex items-end justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-2xl font-extrabold text-white">{item.title}</div>
+                  <div className="mt-1 truncate text-sm font-semibold text-white/90">
+                    {item.zip} • {item.county} • {item.category} • {conditionLabel(item.condition)}
+                  </div>
+                </div>
+
+                <div className="shrink-0 rounded-2xl border border-white/20 bg-white/90 px-4 py-3 text-right shadow-sm">
+                  <div className="text-xl font-extrabold text-slate-900">${item.price}</div>
+                  <div className="text-[11px] font-semibold text-slate-600">
+                    {item.listing_type === "rent" ? `per ${item.price_type}` : "for sale"}
+                  </div>
+                </div>
+              </div>
+
+              {mediaCount > 1 ? (
+                <div className="absolute top-4 right-4 rounded-full bg-white/85 px-3 py-1 text-xs font-extrabold text-slate-900 shadow-sm">
+                  {mediaIndex + 1}/{mediaCount}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Thumbs */}
+            {mediaCount > 1 ? (
+              <div className="flex gap-2 overflow-x-auto border-t border-slate-200/70 p-3">
+                {images.map((url, i) => (
+                  <button
+                    key={url}
+                    type="button"
+                    onClick={() => setMediaIndex(i)}
+                    className={cx(
+                      "h-16 w-20 flex-none overflow-hidden rounded-2xl border bg-white",
+                      mediaIndex === i ? "border-slate-900" : "border-slate-200"
+                    )}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+                {hasVideo ? (
+                  <button
+                    type="button"
+                    onClick={() => setMediaIndex(images.length)}
+                    className={cx(
+                      "h-16 w-20 flex-none overflow-hidden rounded-2xl border bg-white",
+                      mediaIndex === images.length ? "border-slate-900" : "border-slate-200"
+                    )}
+                  >
+                    <div className="flex h-full w-full items-center justify-center text-xs font-extrabold text-slate-700">
+                      Video
+                    </div>
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : (
+          <section className="mt-4 rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+            <div className="text-lg font-extrabold text-slate-900">{item.title}</div>
+            <div className="mt-1 text-sm font-semibold text-slate-600">
+              {item.zip} • {item.county} • {item.category} • {conditionLabel(item.condition)}
+            </div>
+          </section>
+        )}
+
+        {/* Content */}
+        <section className="mt-4 rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <div className="text-base font-extrabold text-slate-900">Details</div>
+              <div className="mt-1 text-sm font-semibold text-slate-600">
+                Item reviews removed for demo.
+              </div>
+            </div>
+
+            <div className="shrink-0 rounded-2xl border border-slate-200/70 bg-white/80 px-4 py-3 text-right shadow-sm">
+              <div className="text-lg font-extrabold text-slate-900">${item.price}</div>
+              <div className="text-[11px] font-semibold text-slate-600">
+                {item.listing_type === "rent" ? `per ${item.price_type}` : "for sale"}
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-4 whitespace-pre-wrap text-sm font-semibold leading-6 text-slate-700">
+            {item.description}
+          </p>
+        </section>
+
+        {/* Owner card + actions */}
+        <section className="mt-4 rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+          <div className="text-xs font-extrabold text-slate-500">OWNER</div>
+          <div className="mt-1 text-lg font-extrabold text-slate-900">{owner?.name || "User"}</div>
+          <p className="mt-1 text-sm font-semibold text-slate-700">{owner?.bio || "No bio yet."}</p>
+
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            <Link
+              href={`/u/${item.owner_id}`}
+              className="rounded-2xl border border-slate-200/70 bg-white/80 px-4 py-3 text-center text-xs font-extrabold text-slate-900 shadow-sm hover:bg-white active:scale-[0.99]"
+            >
+              View profile
+            </Link>
+
+            {isOwner ? (
+              <Link
+                href={`/items/${item.id}/edit`}
+                className="rounded-2xl bg-slate-900 px-4 py-3 text-center text-xs font-extrabold text-white shadow-lg shadow-slate-900/20 hover:bg-slate-800 active:scale-[0.99]"
+              >
+                Edit listing
+              </Link>
+            ) : (
+              <button
+                onClick={messageOwner}
+                className="rounded-2xl bg-slate-900 px-4 py-3 text-xs font-extrabold text-white shadow-lg shadow-slate-900/20 hover:bg-slate-800 active:scale-[0.99]"
+              >
+                Message
+              </button>
+            )}
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}

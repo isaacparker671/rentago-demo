@@ -3,10 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import { signUp } from "../../lib/authClient";
+import { supabase } from "../../lib/supabaseClient";
 
 export default function SignupPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [zip, setZip] = useState("");
+  const [county, setCounty] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -15,12 +18,39 @@ export default function SignupPage() {
     setMsg(null);
     setLoading(true);
 
-    const { error } = await signUp(email.trim(), password);
+    const zipClean = zip.replace(/\D/g, "").slice(0, 5);
+    const countyClean = county.trim();
+    if (zipClean.length !== 5) {
+      setMsg("ZIP must be 5 digits.");
+      setLoading(false);
+      return;
+    }
+    if (!countyClean) {
+      setMsg("County is required.");
+      setLoading(false);
+      return;
+    }
+
+    const { data, error } = await signUp(email.trim(), password, {
+      zip: zipClean,
+      county: countyClean,
+    });
 
     if (error) {
       setMsg(error.message);
       setLoading(false);
       return;
+    }
+
+    // Best effort: ensure profile has location fields for browse defaults.
+    const createdUserId = data?.user?.id;
+    if (createdUserId) {
+      await supabase
+        .from("profiles")
+        .upsert(
+          { id: createdUserId, zip: zipClean, county: countyClean, updated_at: new Date().toISOString() },
+          { onConflict: "id" }
+        );
     }
 
     setMsg("Account created. Now log in.");
@@ -37,7 +67,7 @@ export default function SignupPage() {
 
         <form onSubmit={onSubmit} className="mt-4 space-y-3">
           <input
-            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400"
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
             placeholder="Email"
             type="email"
             autoComplete="email"
@@ -46,13 +76,28 @@ export default function SignupPage() {
             required
           />
           <input
-            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400"
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
             placeholder="Password (min 6 chars)"
             type="password"
             autoComplete="new-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             minLength={6}
+            required
+          />
+          <input
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
+            placeholder="ZIP code"
+            inputMode="numeric"
+            value={zip}
+            onChange={(e) => setZip(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            required
+          />
+          <input
+            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
+            placeholder="County"
+            value={county}
+            onChange={(e) => setCounty(e.target.value)}
             required
           />
 

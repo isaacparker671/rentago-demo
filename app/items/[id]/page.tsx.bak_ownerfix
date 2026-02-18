@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import AvailabilityEditor from "../../../components/AvailabilityEditor";
-import { StarsDisplay, StarsInput } from "../../../components/Stars";
 
 type Item = {
   id: string;
@@ -26,16 +25,6 @@ type Item = {
 };
 
 type Owner = { id: string; name: string | null; bio: string | null };
-type ItemReview = {
-  id: string;
-  item_id: string;
-  reviewer_id: string;
-  rating: number;
-  comment: string;
-  created_at: string;
-  reviewer_name?: string | null;
-  reviewer_avatar?: string | null;
-};
 
 function formatCondition(c: Item["condition"]) {
   if (c === "brand_new") return "Brand New";
@@ -52,14 +41,6 @@ export default function ItemDetailPage() {
   const [owner, setOwner] = useState<Owner | null>(null);
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [reviews, setReviews] = useState<ItemReview[]>([]);
-  const [canReviewItem, setCanReviewItem] = useState(false);
-  const [reviewRating, setReviewRating] = useState(5);
-  const [reviewComment, setReviewComment] = useState("");
-  const [savingReview, setSavingReview] = useState(false);
-  const [reviewMsg, setReviewMsg] = useState<string | null>(null);
-  const [reviewFeatureReady, setReviewFeatureReady] = useState(true);
-  const [markingReturned, setMarkingReturned] = useState(false);
 
   // media UI
   const [mediaIndex, setMediaIndex] = useState(0);
@@ -67,79 +48,6 @@ export default function ItemDetailPage() {
   // renter calendar
   const [rentCalOpen, setRentCalOpen] = useState(false);
   const [requestedDays, setRequestedDays] = useState<string[]>([]);
-
-  async function loadItemReviews(itemId: string, currentViewerId: string | null, currentItem: Item) {
-    if (currentItem.listing_type !== "rent") {
-      setReviews([]);
-      setCanReviewItem(false);
-      return;
-    }
-
-    const { data: rawReviews, error: reviewsErr } = await supabase
-      .from("item_reviews")
-      .select("id,item_id,reviewer_id,rating,comment,created_at")
-      .eq("item_id", itemId)
-      .order("created_at", { ascending: false });
-
-    if (reviewsErr) {
-      const msg = reviewsErr.message || "";
-      if (msg.includes("Could not find the table") || msg.includes("item_reviews")) {
-        setReviewFeatureReady(false);
-        setReviews([]);
-        setCanReviewItem(false);
-        return;
-      }
-      setReviewFeatureReady(false);
-      setReviews([]);
-      setCanReviewItem(false);
-      return;
-    }
-
-    setReviewFeatureReady(true);
-
-    const list = ((rawReviews as ItemReview[] | null) ?? []).map((r) => ({
-      ...r,
-      rating: Number(r.rating || 0),
-    }));
-
-    const reviewerIds = Array.from(new Set(list.map((r) => r.reviewer_id))).filter(Boolean);
-    const reviewerMap = new Map<string, { name: string | null; avatar_url: string | null }>();
-    if (reviewerIds.length) {
-      const { data: profileRows } = await supabase
-        .from("profiles")
-        .select("id,name,avatar_url")
-        .in("id", reviewerIds);
-
-      ((profileRows as Array<{ id: string; name: string | null; avatar_url: string | null }> | null) ?? []).forEach(
-        (p) => reviewerMap.set(p.id, { name: p.name, avatar_url: p.avatar_url })
-      );
-    }
-
-    const merged = list.map((r) => ({
-      ...r,
-      reviewer_name: reviewerMap.get(r.reviewer_id)?.name ?? null,
-      reviewer_avatar: reviewerMap.get(r.reviewer_id)?.avatar_url ?? null,
-    }));
-    setReviews(merged);
-
-    if (!currentViewerId) {
-      setCanReviewItem(false);
-      return;
-    }
-
-    const { data: txRows } = await supabase
-      .from("transactions")
-      .select("id")
-      .eq("item_id", itemId)
-      .eq("type", "rent")
-      .eq("status", "completed")
-      .eq("buyer_id", currentViewerId)
-      .limit(1);
-
-    const hasCompletedRent = !!(txRows && txRows.length);
-    const hasAlreadyReviewed = merged.some((r) => r.reviewer_id === currentViewerId);
-    setCanReviewItem(hasCompletedRent && currentItem.status === "available" && !hasAlreadyReviewed);
-  }
 
   useEffect(() => {
     if (!id) return;
@@ -174,7 +82,6 @@ export default function ItemDetailPage() {
         .single();
 
       setOwner((ownerData as Owner) ?? null);
-      await loadItemReviews(typedItem.id, vid, typedItem);
 
       setLoading(false);
     }
@@ -241,69 +148,6 @@ export default function ItemDetailPage() {
     await supabase.from("conversations").update({ last_message_at: new Date().toISOString() }).eq("id", convoId);
 
     router.push(`/messages/${convoId}`);
-  }
-
-  async function markReturned() {
-    if (!item || !viewerId) return;
-    if (viewerId !== item.owner_id) return;
-    if (item.listing_type !== "rent" || item.status !== "rented") return;
-
-    const ok = confirm("Mark this rental as returned and available again?");
-    if (!ok) return;
-
-    setMarkingReturned(true);
-    const { error } = await supabase
-      .from("items")
-      .update({ status: "available" })
-      .eq("id", item.id);
-
-    if (!error) {
-      const nextItem = { ...item, status: "available" as const };
-      setItem(nextItem);
-      await loadItemReviews(item.id, viewerId, nextItem);
-    }
-    setMarkingReturned(false);
-  }
-
-  async function submitItemReview() {
-    if (!item || !viewerId || !canReviewItem || !reviewFeatureReady) return;
-    if (!reviewComment.trim()) {
-      setReviewMsg("Write a quick review comment.");
-      return;
-    }
-
-    setSavingReview(true);
-    setReviewMsg(null);
-
-    const { error } = await supabase
-      .from("item_reviews")
-      .upsert(
-        {
-          item_id: item.id,
-          reviewer_id: viewerId,
-          rating: Math.max(1, Math.min(5, Math.round(reviewRating))),
-          comment: reviewComment.trim(),
-        },
-        { onConflict: "item_id,reviewer_id" }
-      );
-
-    if (error) {
-      const msg = error.message || "Could not save review.";
-      if (msg.includes("Could not find the table") || msg.includes("item_reviews")) {
-        setReviewFeatureReady(false);
-        setReviewMsg("Reviews are not set up yet. Ask admin to create item_reviews table.");
-        setSavingReview(false);
-        return;
-      }
-      setReviewMsg(error.message || "Could not save review.");
-      setSavingReview(false);
-      return;
-    }
-
-    setReviewComment("");
-    setReviewRating(5);
-    await loadItemReviews(item.id, viewerId, item);
-    setSavingReview(false);
   }
 
   if (!id) {
@@ -473,7 +317,7 @@ export default function ItemDetailPage() {
           <div className="mt-1 text-sm font-bold text-slate-900">{owner?.name || "User"}</div>
           <p className="mt-1 text-sm text-slate-700">{owner?.bio || "No bio yet."}</p>
 
-          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-2 gap-2">
             <Link
               href={`/u/${item.owner_id}`}
               className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-center text-sm font-semibold text-slate-900"
@@ -491,78 +335,7 @@ export default function ItemDetailPage() {
               </button>
             )}
           </div>
-
-          {isOwner && item.listing_type === "rent" && item.status === "rented" ? (
-            <button
-              type="button"
-              onClick={markReturned}
-              disabled={markingReturned}
-              className="mt-2 w-full rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {markingReturned ? "Marking returned…" : "Returned"}
-            </button>
-          ) : null}
         </div>
-
-        {item.listing_type === "rent" ? (
-          <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-extrabold text-slate-900">Item reviews</div>
-            <div className="mt-1 text-xs font-semibold text-slate-600">
-              Only completed renters can review after the item is marked returned.
-            </div>
-
-            {!reviewFeatureReady ? (
-              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-                Reviews are not set up yet. Create the <code>item_reviews</code> table in Supabase.
-              </div>
-            ) : null}
-
-            {canReviewItem && reviewFeatureReady ? (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
-                <div className="text-xs font-semibold text-slate-600">Your rating</div>
-                <div className="mt-1">
-                  <StarsInput value={reviewRating} onChange={setReviewRating} />
-                </div>
-                <textarea
-                  value={reviewComment}
-                  onChange={(e) => setReviewComment(e.target.value)}
-                  rows={3}
-                  placeholder="How was the item?"
-                  className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-400"
-                />
-                {reviewMsg ? (
-                  <div className="mt-2 text-xs font-semibold text-rose-600">{reviewMsg}</div>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={submitItemReview}
-                  disabled={savingReview}
-                  className="mt-2 w-full rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white disabled:opacity-60 sm:w-auto"
-                >
-                  {savingReview ? "Saving…" : "Submit review"}
-                </button>
-              </div>
-            ) : null}
-
-            <div className="mt-3 space-y-2">
-              {reviews.length ? (
-                reviews.map((r) => (
-                  <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 truncate text-xs font-semibold text-slate-700">
-                        {r.reviewer_name || "Renter"}
-                      </div>
-                      <StarsDisplay value={r.rating} />
-                    </div>
-                    <div className="mt-1 text-sm text-slate-700">{r.comment}</div>
-                  </div>
-                ))
-              ) : (
-                <div className="text-sm font-semibold text-slate-600">No item reviews yet.</div>
-              )}
-            </div>
-          </div>
-        ) : null}
       </div>
     </main>
   );

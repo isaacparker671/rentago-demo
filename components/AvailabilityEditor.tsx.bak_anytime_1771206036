@@ -1,0 +1,252 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Mode = "owner" | "renter";
+
+type Props = {
+  open: boolean;
+  mode: Mode;
+  title?: string;
+
+  // Owner availability: null/[] => anytime
+  availabilityDays?: string[] | null;
+
+  // Booked/unavailable: always blocked (red)
+  bookedDays?: string[] | null;
+
+  // Selected (renter picks, or owner is editing)
+  value?: string[];
+
+  onClose: () => void;
+
+  // For both modes (controlled)
+  onChange?: (days: string[]) => void;
+
+  // Optional convenience actions
+  onSaveOwner?: (availabilityDays: string[] | null) => void;
+  onConfirmRenter?: (requestedDays: string[]) => void;
+};
+
+function pad(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function toYMD(d: Date) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function addMonths(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+
+function daysInMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+}
+
+export default function AvailabilityEditor({
+  open,
+  mode,
+  title,
+  availabilityDays,
+  bookedDays,
+  value,
+  onClose,
+  onChange,
+  onSaveOwner,
+  onConfirmRenter,
+}: Props) {
+  const anytime = !availabilityDays || availabilityDays.length === 0; // ✅ blank = anytime
+
+  const booked = useMemo(() => new Set((bookedDays ?? []).filter(Boolean)), [bookedDays]);
+  const available = useMemo(() => new Set((availabilityDays ?? []).filter(Boolean)), [availabilityDays]);
+
+  const [mounted, setMounted] = useState(false);
+  const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()));
+
+  const [local, setLocal] = useState<string[]>(() => value ?? []);
+
+  useEffect(() => setMounted(true), []);
+  useEffect(() => setLocal(value ?? []), [value]);
+
+  if (!open || !mounted) return null;
+
+  const selected = new Set(local);
+
+  function isSelectable(day: string) {
+    if (booked.has(day)) return False;
+    if (mode === "owner") return true;
+    // renter mode:
+    return anytime || available.has(day);
+  }
+
+  // JS doesn't have False; keep it correct:
+  function isSelectableSafe(day: string) {
+    if (booked.has(day)) return false;
+    if (mode === "owner") return true;
+    return anytime || available.has(day);
+  }
+
+  function toggle(day: string) {
+    if (!isSelectableSafe(day)) return;
+
+    const next = selected.has(day)
+      ? local.filter((x) => x !== day)
+      : [...local, day].sort();
+
+    setLocal(next);
+    onChange?.(next);
+  }
+
+  function renderMonth(m: Date) {
+    const first = startOfMonth(m);
+    const total = daysInMonth(m);
+    const startWeekday = first.getDay(); // 0=Sun
+
+    const cells: Array<string | null> = [];
+    for (let i = 0; i < startWeekday; i++) cells.push(null);
+    for (let d = 1; d <= total; d++) {
+      cells.push(toYMD(new Date(m.getFullYear(), m.getMonth(), d)));
+    }
+    while (cells.length % 7 !== 0) cells.push(null);
+
+    const label = first.toLocaleString(undefined, { month: "long", year: "numeric" });
+
+    return (
+      <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-extrabold text-slate-900">{label}</div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+              onClick={() => setMonth(addMonths(month, -1))}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+              onClick={() => setMonth(addMonths(month, 1))}
+            >
+              →
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 grid grid-cols-7 gap-2 text-center text-[11px] font-extrabold text-slate-500">
+          {["S", "M", "T", "W", "T", "F", "S"].map((x, i) => (
+            <div key={`${x}-${i}`}>{x}</div>
+          ))}
+        </div>
+
+        <div className="mt-2 grid grid-cols-7 gap-2">
+          {cells.map((day, idx) => {
+            if (!day) return <div key={`empty-${idx}`} />;
+
+            const isBooked = booked.has(day);
+            const isAvail = anytime || available.has(day);
+            const isSel = selected.has(day);
+
+            // Color rules:
+            // booked: red (disabled)
+            // available: green outline if renter mode OR if owner wants to see
+            // selected: solid green
+            const disabled = !isSelectableSafe(day);
+
+            const cls =
+              isBooked
+                ? "bg-rose-100 text-rose-800 border-rose-200"
+                : isSel
+                ? "bg-emerald-600 text-white border-emerald-700"
+                : isAvail
+                ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                : "bg-slate-50 text-slate-400 border-slate-200";
+
+            return (
+              <button
+                key={day}
+                type="button"
+                disabled={disabled}
+                onClick={() => toggle(day)}
+                className={[
+                  "h-10 rounded-2xl border text-sm font-extrabold transition active:scale-[0.99]",
+                  cls,
+                  disabled ? "opacity-60 cursor-not-allowed" : "hover:brightness-95",
+                ].join(" ")}
+                title={isBooked ? "Booked" : isAvail ? "Available" : "Not available"}
+              >
+                {Number(day.slice(-2))}
+              </button>
+            );
+          })}
+        </div>
+
+        {mode === "renter" ? (
+          <div className="mt-3 text-xs font-semibold text-slate-600">
+            {anytime ? "Available anytime (owner didn’t set specific days)." : "Select only green available days."}
+          </div>
+        ) : (
+          <div className="mt-3 text-xs font-semibold text-slate-600">
+            Leave blank to mean “available anytime”.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="absolute bottom-0 left-0 right-0 mx-auto max-w-3xl rounded-t-3xl border-t border-slate-200 bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <div>
+            <div className="text-base font-extrabold text-slate-900">
+              {title || (mode === "owner" ? "Set available dates" : "Pick rental dates")}
+            </div>
+            <div className="text-xs font-semibold text-slate-500">
+              {mode === "owner" ? "Tap dates to toggle availability." : "Tap green dates to request."}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+              onClick={() => {
+                setLocal([]);
+                onChange?.([]);
+              }}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-extrabold text-white hover:bg-slate-800"
+              onClick={() => {
+                if (mode === "owner") {
+                  // blank => anytime
+                  const out = local.length ? local : null;
+                  onSaveOwner?.(out);
+                } else {
+                  onConfirmRenter?.(local);
+                }
+                onClose();
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-[75vh] overflow-y-auto px-5 py-4 space-y-4">
+          {renderMonth(month)}
+        </div>
+      </div>
+    </div>
+  );
+}

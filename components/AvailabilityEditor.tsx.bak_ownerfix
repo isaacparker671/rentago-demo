@@ -1,0 +1,298 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+
+  // "owner" = pick availability days
+  // "renter" = pick rental days (may be limited to availabilityDays)
+  mode: "owner" | "renter";
+
+  title?: string;
+  subtitle?: string;
+
+  // Optional labels
+  primaryLabel?: string;
+
+  // Initial selected days (YYYY-MM-DD)
+  initialDates?: string[];
+
+  // When provided (non-empty), renter can ONLY pick these days
+  availabilityDays?: string[];
+
+  // Callbacks (some pages pass onSave, some pass onConfirm — support both)
+  onSave?: (days: string[]) => void;
+  onConfirm?: (days: string[]) => void;
+};
+
+function pad2(n: number) {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+
+function toYMD(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+function addMonths(d: Date, delta: number) {
+  return new Date(d.getFullYear(), d.getMonth() + delta, 1);
+}
+
+function daysInMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+}
+
+function monthLabel(d: Date) {
+  return d.toLocaleString(undefined, { month: "long", year: "numeric" });
+}
+
+export default function AvailabilityEditor({
+  open,
+  onClose,
+  mode,
+  title,
+  subtitle,
+  primaryLabel,
+  initialDates,
+  availabilityDays,
+  onSave,
+  onConfirm,
+}: Props) {
+  const saveCb = onSave || onConfirm;     // ✅ either prop works
+  const confirmCb = onConfirm || onSave; // ✅ both buttons work
+
+  const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()));
+  const [local, setLocal] = useState<string[]>([]);
+
+  // Only sync initialDates when modal opens (prevents weird loops)
+  useEffect(() => {
+    if (!open) return;
+    setLocal((initialDates ?? []).filter(Boolean));
+    setMonth(startOfMonth(new Date()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const availabilitySet = useMemo(() => new Set((availabilityDays ?? []).filter(Boolean)), [availabilityDays]);
+  const limitToAvailability = mode === "renter" && availabilitySet.size > 0;
+
+  const days = useMemo(() => {
+    const first = startOfMonth(month);
+    const dim = daysInMonth(first);
+
+    // 0=Sun..6=Sat
+    const offset = first.getDay();
+
+    const cells: Array<{ key: string; ymd: string | null }> = [];
+
+    // leading blanks
+    for (let i = 0; i < offset; i++) cells.push({ key: `b-${i}`, ymd: null });
+
+    for (let day = 1; day <= dim; day++) {
+      const d = new Date(first.getFullYear(), first.getMonth(), day);
+      cells.push({ key: `d-${toYMD(d)}`, ymd: toYMD(d) });
+    }
+
+    // trailing blanks to fill 6 rows (optional)
+    while (cells.length % 7 !== 0) cells.push({ key: `t-${cells.length}`, ymd: null });
+
+    return cells;
+  }, [month]);
+
+  function toggleDay(ymd: string) {
+    // renter can only pick availabilityDays if owner set them
+    if (limitToAvailability && !availabilitySet.has(ymd)) return;
+
+    setLocal((prev) => {
+      const set = new Set(prev);
+      if (set.has(ymd)) set.delete(ymd);
+      else set.add(ymd);
+      return Array.from(set).sort();
+    });
+  }
+
+  function isSelected(ymd: string) {
+    return local.includes(ymd);
+  }
+
+  function isAvailable(ymd: string) {
+    if (!limitToAvailability) return true;      // ✅ owner left blank OR owner mode → treat as available
+    return availabilitySet.has(ymd);            // ✅ limited set
+  }
+
+  function fireRequest() {
+    const payload = Array.from(new Set(local)).sort();
+
+    // ✅ If callback missing, don't crash – just close (but you shouldn't see this now)
+    if (!saveCb && !confirmCb) {
+      console.warn("Missing onSave/onConfirm callback from the page. Calendar can open but can’t submit.");
+      onClose();
+      return;
+    }
+
+    // ✅ BOTH buttons should behave the same: submit payload (can be [])
+    if (saveCb) saveCb(payload);
+    else if (confirmCb) confirmCb(payload);
+
+    onClose();
+  }
+
+  function fireAltRequest() {
+    const payload = Array.from(new Set(local)).sort();
+    if (!saveCb && !confirmCb) {
+      console.warn("Missing onSave/onConfirm callback from the page. Calendar can open but can’t submit.");
+      onClose();
+      return;
+    }
+
+    // ✅ Alternate button also submits (same effect)
+    if (confirmCb) confirmCb(payload);
+    else if (saveCb) saveCb(payload);
+
+    onClose();
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center">
+      {/* overlay */}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/40"
+      />
+
+      {/* modal */}
+      <div className="relative z-[81] w-[min(520px,calc(100%-24px))] overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl">
+        <div className="p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-base font-extrabold text-slate-900">{title || (mode === "owner" ? "Set available dates" : "Pick rental dates")}</div>
+              <div className="mt-1 text-sm font-semibold text-slate-600">
+                {subtitle ||
+                  (mode === "owner"
+                    ? "Tap the days you want available. Leave blank for available anytime."
+                    : limitToAvailability
+                    ? "Owner set specific available days (green)."
+                    : "No dates selected — you can request any days.")}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-700 hover:bg-slate-50"
+            >
+              Close
+            </button>
+          </div>
+
+          {/* month header */}
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => setMonth((m) => addMonths(m, -1))}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-700 hover:bg-slate-50"
+            >
+              ←
+            </button>
+
+            <div className="text-sm font-extrabold text-slate-900">{monthLabel(month)}</div>
+
+            <button
+              type="button"
+              onClick={() => setMonth((m) => addMonths(m, 1))}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-extrabold text-slate-700 hover:bg-slate-50"
+            >
+              →
+            </button>
+          </div>
+
+          {/* weekday labels (unique keys) */}
+          <div className="mt-4 grid grid-cols-7 gap-2 text-center text-xs font-extrabold text-slate-500">
+            {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (
+              <div key={`${d}-${i}`}>{d}</div>
+            ))}
+          </div>
+
+          {/* day grid */}
+          <div className="mt-2 grid grid-cols-7 gap-2">
+            {days.map((c) => {
+              if (!c.ymd) return <div key={c.key} className="h-10" />;
+
+              const available = isAvailable(c.ymd);
+              const selected = isSelected(c.ymd);
+
+              // ✅ Visual rules:
+              // - If limited availability: available days show green-ish, unavailable show red-ish
+              // - Selected day shows dark highlight
+              const base =
+                "h-10 rounded-2xl text-xs font-extrabold transition active:scale-[0.99]";
+              const cls = selected
+                ? "bg-slate-900 text-white"
+                : available
+                ? (limitToAvailability ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-50 text-slate-900 border border-slate-200")
+                : "bg-rose-50 text-rose-700 border border-rose-200";
+
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => toggleDay(c.ymd!)}
+                  className={`${base} ${cls}`}
+                  disabled={limitToAvailability && !available}
+                  title={c.ymd}
+                >
+                  {Number(c.ymd.slice(-2))}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* selected summary */}
+          <div className="mt-4 text-sm font-semibold text-slate-700">
+            {local.length ? (
+              <span>
+                <span className="font-extrabold text-slate-900">{local.length}</span> day(s) selected
+              </span>
+            ) : (
+              <span>No dates selected.</span>
+            )}
+          </div>
+
+          {/* actions */}
+          <div className="mt-4 flex gap-2">
+            {mode === "renter" ? (
+            <button
+              type="button"
+              onClick={fireAltRequest}
+              className="w-full rounded-2xl border border-slate-200 bg-white px-5 py-3 text-xs font-extrabold text-slate-900 hover:bg-slate-50"
+            >
+              Request days
+            </button>
+          ) : null}
+
+            {/* ✅ This button ALSO submits the same request */}
+            <button
+              type="button"
+              onClick={fireRequest}
+              className="w-full rounded-2xl bg-slate-900 px-5 py-3 text-xs font-extrabold text-white hover:bg-slate-800"
+            >
+              {primaryLabel || (mode === "owner" ? "Save" : "Send request")}
+            </button>
+          </div>
+
+          <div className="mt-2 text-[11px] font-semibold text-slate-500">
+            Tip: If you pick none, it still sends the request as “Is this available?”
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { supabase } from "../../lib/supabaseClient";
+import { useParams, useRouter } from "next/navigation";
+import { supabase } from "../../../lib/supabaseClient";
 
 type Profile = {
   id: string;
@@ -80,14 +80,10 @@ function conditionLabel(c: Item["condition"]) {
   return "Old";
 }
 
-export default function MyProfilePage() {
+export default function PublicProfilePage() {
+  const params = useParams() as { id: string };
   const router = useRouter();
 
-  const onLogout = async () => {
-    await supabase.auth.signOut();
-    router.push('/login');
-    router.refresh();
-  };
   const [meId, setMeId] = useState<string | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -104,52 +100,46 @@ export default function MyProfilePage() {
       setLoading(true);
 
       const { data: auth } = await supabase.auth.getUser();
-      const uid = auth?.user?.id ?? null;
-      setMeId(uid);
+      setMeId(auth?.user?.id ?? null);
 
-      if (!uid) {
-        setProfile(null);
-        setItems([]);
-        setReviews([]);
-        setLoading(false);
-        return;
-      }
-
-      // profile
       const { data: p } = await supabase
         .from("profiles")
         .select("id,name,bio,avatar_url,zip,city,county")
-        .eq("id", uid)
+        .eq("id", params.id)
         .single();
 
       setProfile((p as Profile) || null);
 
-      // my items
       const { data: it } = await supabase
         .from("items")
         .select(
           "id,owner_id,title,price,price_type,listing_type,status,zip,city,county,category,condition,image_urls,created_at"
         )
-        .eq("owner_id", uid)
+        .eq("owner_id", params.id)
         .order("created_at", { ascending: false });
 
       setItems(((it as any[]) || []) as Item[]);
 
-      // user reviews about me
       const { data: ur } = await supabase
         .from("user_reviews")
         .select("id,reviewed_user_id,reviewer_id,rating,comment,created_at")
-        .eq("reviewed_user_id", uid)
+        .eq("reviewed_user_id", params.id)
         .order("created_at", { ascending: false });
 
       const base = (((ur as any[]) || []) as UserReview[]) || [];
 
-      // reviewer profiles (best effort)
       const reviewerIds = Array.from(new Set(base.map((r) => r.reviewer_id))).filter(Boolean);
-      let reviewerMap = new Map<string, { name?: string | null; avatar_url?: string | null }>();
+      const reviewerMap = new Map<string, { name?: string | null; avatar_url?: string | null }>();
+
       if (reviewerIds.length) {
-        const { data: rp } = await supabase.from("profiles").select("id,name,avatar_url").in("id", reviewerIds);
-        ((rp as any[]) || []).forEach((x) => reviewerMap.set(x.id, { name: x.name ?? null, avatar_url: x.avatar_url ?? null }));
+        const { data: rp } = await supabase
+          .from("profiles")
+          .select("id,name,avatar_url")
+          .in("id", reviewerIds);
+
+        ((rp as any[]) || []).forEach((x) => {
+          reviewerMap.set(x.id, { name: x.name ?? null, avatar_url: x.avatar_url ?? null });
+        });
       }
 
       setReviews(
@@ -163,51 +153,60 @@ export default function MyProfilePage() {
     }
 
     load();
-  }, []);
+  }, [params.id]);
 
   if (loading) {
     return (
-      <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur-xl">
+      <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
         <div className="h-6 w-44 animate-pulse rounded bg-slate-100" />
-        <div className="mt-4 h-20 w-full animate-pulse rounded-3xl bg-slate-100" />
+        <div className="mt-4 h-28 w-full animate-pulse rounded-3xl bg-slate-100" />
         <div className="mt-4 h-40 w-full animate-pulse rounded-3xl bg-slate-100" />
       </div>
     );
   }
 
-  if (!meId) {
+  if (!profile) {
     return (
-      <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur-xl">
-        <div className="text-xl font-extrabold text-slate-900">You’re not logged in.</div>
-        <div className="mt-2 text-sm font-semibold text-slate-600">Log in to view and edit your profile.</div>
-        <div className="mt-5 flex gap-2">
-          <Link
-            href="/login"
-            className="rounded-2xl bg-sky-600 px-5 py-3 text-sm font-extrabold text-white shadow-sm hover:bg-sky-700"
-          >
-            Log in
-          </Link>
-          <Link
-            href="/signup"
-            className="rounded-2xl border border-slate-200/70 bg-white/70 px-5 py-3 text-sm font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white"
-          >
-            Sign up
-          </Link>
-        </div>
+      <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur">
+        <div className="text-xl font-extrabold text-slate-900">Profile not found</div>
+        <div className="mt-2 text-sm font-semibold text-slate-600">This user may not exist.</div>
+        <Link
+          href="/browse"
+          className="mt-5 inline-flex rounded-2xl bg-sky-600 px-5 py-3 text-sm font-extrabold text-white shadow-sm hover:bg-sky-700"
+        >
+          Back to Browse
+        </Link>
       </div>
     );
   }
 
-  const initials = (profile?.name || "U").slice(0, 1).toUpperCase();
-  const locationLine = `${profile?.city ? profile.city + " • " : ""}${profile?.zip || ""}${profile?.county ? " • " + profile.county : ""}`;
+  const initials = (profile.name || "U").slice(0, 1).toUpperCase();
+  const locationLine = `${profile.city ? profile.city + " • " : ""}${profile.zip || ""}${
+    profile.county ? " • " + profile.county : ""
+  }`;
 
   return (
-    <main className="mx-auto max-w-3xl px-4 pb-24 pt-6">
-      {/* Header card */}
-      <section className="rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur-xl">
+    <main className="pb-24"><div className="mx-auto max-w-3xl px-4 pt-6">
+      <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-4 shadow-sm backdrop-blur"><div className="flex items-center justify-between gap-2">
+        <button
+          onClick={() => router.back()}
+          className="rounded-2xl border border-slate-200/70 bg-white/70 px-4 py-2 text-xs font-extrabold text-slate-900 shadow-sm backdrop-blur hover:bg-white"
+        >
+          ← Back
+        </button>
+
+        <Link
+          href={`/messages/new?userId=${encodeURIComponent(profile.id)}`}
+          className="rounded-2xl bg-sky-600 px-4 py-2 text-xs font-extrabold text-white shadow-sm hover:bg-sky-700 active:scale-[0.99]"
+        >
+          Message
+        </Link>
+      </div></div>
+
+      <section className="mt-4 rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-          <div className="h-20 w-20 overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm">
-            {profile?.avatar_url ? (
+          <div className="h-24 w-24 overflow-hidden rounded-full border border-slate-200 bg-white shadow-sm">
+            {profile.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={profile.avatar_url} alt="avatar" className="h-full w-full object-cover" />
             ) : (
@@ -218,9 +217,7 @@ export default function MyProfilePage() {
           </div>
 
           <div className="min-w-0 flex-1">
-            <div className="text-2xl font-extrabold tracking-tight text-slate-900">
-              {profile?.name || "Your profile"}
-            </div>
+            <div className="text-3xl font-extrabold tracking-tight text-slate-900">{profile.name || "User"}</div>
             <div className="mt-1 text-sm font-semibold text-slate-600">{locationLine || "Location not set"}</div>
 
             <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -241,36 +238,14 @@ export default function MyProfilePage() {
               </span>
             </div>
           </div>
-
-          <Link
-            href="/profile/edit"
-            className="self-start rounded-2xl bg-slate-900 px-4 py-2 text-xs font-extrabold text-white shadow-lg shadow-slate-900/15 hover:bg-slate-800 active:scale-[0.99]"
-          >
-            Edit
-          </Link>
         </div>
 
-        <div className="mt-4 text-sm font-semibold text-slate-700">
-          {profile?.bio || "Add a bio so people know who they’re dealing with."}
-        </div>
+        <div className="mt-4 text-sm font-semibold text-slate-700">{profile.bio || "No bio yet."}</div>
       </section>
 
-      {/* My listings */}
       <section className="mt-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <div className="text-lg font-extrabold text-slate-900">Your listings</div>
-            <div className="text-sm font-semibold text-slate-600">Everything you’ve posted</div>
-          </div>
-          <Link
-            href="/post"
-            className="rounded-2xl bg-sky-600 px-4 py-2 text-xs font-extrabold text-white shadow-sm hover:bg-sky-700 active:scale-[0.99]"
-          >
-            + Post item
-          </Link>
-        </div>
-
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="text-lg font-extrabold text-slate-900">Listings</div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 items-stretch">
           {items.map((it) => {
             const hero = (it.image_urls ?? []).filter(Boolean)[0] || null;
             const loc = `${it.city ? it.city + " • " : ""}${it.zip} • ${it.county}`;
@@ -280,7 +255,7 @@ export default function MyProfilePage() {
                 href={`/items/${it.id}`}
                 className="group flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.99]"
               >
-                <div className="relative aspect-[16/11] w-full flex-none bg-slate-50">
+                <div className="relative aspect-[16/11] w-full bg-slate-50">
                   {hero ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={hero} alt={it.title} className="h-full w-full object-cover" />
@@ -331,25 +306,16 @@ export default function MyProfilePage() {
           {!items.length ? (
             <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-6 shadow-sm backdrop-blur sm:col-span-2 lg:col-span-3">
               <div className="text-base font-extrabold text-slate-900">No listings yet</div>
-              <div className="mt-1 text-sm font-semibold text-slate-600">
-                Post your first item to start building trust and reviews.
-              </div>
-              <Link
-                href="/post"
-                className="mt-4 inline-flex rounded-2xl bg-sky-600 px-5 py-3 text-sm font-extrabold text-white shadow-sm hover:bg-sky-700"
-              >
-                Post an item
-              </Link>
+              <div className="mt-1 text-sm font-semibold text-slate-600">This user hasn’t posted any items.</div>
             </div>
           ) : null}
         </div>
       </section>
 
-      {/* Reviews */}
-      <section className="mt-8 rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-3">
+      <section className="mt-8 rounded-3xl border border-slate-200/70 bg-white/75 p-6 shadow-lg shadow-slate-900/5 backdrop-blur">
+        <div className="rounded-3xl border border-slate-200/70 bg-white/70 p-4 shadow-sm backdrop-blur"><div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-lg font-extrabold text-slate-900">Reviews about you</div>
+            <div className="text-lg font-extrabold text-slate-900">Reviews</div>
             <div className="text-sm font-semibold text-slate-600">Unlocked only after finalized transactions</div>
           </div>
 
@@ -359,7 +325,7 @@ export default function MyProfilePage() {
               {avgRating.toFixed(1)}
             </div>
           ) : null}
-        </div>
+        </div></div>
 
         {reviews.length ? (
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -399,16 +365,6 @@ export default function MyProfilePage() {
           <div className="mt-4 text-sm font-semibold text-slate-600">No reviews yet.</div>
         )}
       </section>
-    
-      <div className="mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-4 shadow-lg shadow-slate-900/5 backdrop-blur-xl">
-        <button
-          onClick={onLogout}
-          className="w-full rounded-2xl bg-slate-900 px-4 py-4 text-sm font-extrabold text-white shadow-lg shadow-slate-900/15 hover:bg-slate-800 active:scale-[0.99]"
-        >
-          Log out
-        </button>
-      </div>
-
-    </main>
+    </div></main>
   );
 }

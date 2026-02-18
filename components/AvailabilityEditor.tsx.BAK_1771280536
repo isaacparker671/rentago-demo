@@ -1,0 +1,283 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+
+  // "owner" = selecting which days are available
+  // "renter" = selecting requested rental days (limited by availableDays when provided)
+  mode: "owner" | "renter";
+
+  title?: string;
+  subtitle?: string;
+  primaryLabel?: string;
+
+  // selected days (owner-picked OR renter-picked depending on mode)
+  initialDates?: string[];
+
+  // for renter mode: days the owner marked as available.
+  // empty/undefined => available anytime (all days allowed)
+  availableDays?: string[];
+
+  // preferred callback
+  onSave?: (days: string[]) => void;
+
+  // legacy callback name (if some pages still use it)
+  onConfirm?: (days: string[]) => void;
+};
+
+function pad(n: number) {
+  return n < 10 ? `0${n}` : `${n}`;
+}
+function toYMD(d: Date) {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function startOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+function endOfMonth(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0);
+}
+function addMonths(d: Date, n: number) {
+  return new Date(d.getFullYear(), d.getMonth() + n, 1);
+}
+function daysInMonthGrid(month: Date) {
+  const start = startOfMonth(month);
+  const end = endOfMonth(month);
+
+  // grid starts on Sunday
+  const startGrid = new Date(start);
+  startGrid.setDate(start.getDate() - start.getDay());
+
+  // grid ends on Saturday
+  const endGrid = new Date(end);
+  endGrid.setDate(end.getDate() + (6 - end.getDay()));
+
+  const days: Date[] = [];
+  const cur = new Date(startGrid);
+  while (cur <= endGrid) {
+    days.push(new Date(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return days;
+}
+
+export default function AvailabilityEditor({
+  open,
+  onClose,
+  mode,
+  title,
+  subtitle,
+  primaryLabel,
+  initialDates = [],
+  availableDays,
+  onSave,
+  onConfirm,
+}: Props) {
+  const saveCb = onSave || onConfirm;
+
+  // lock background scroll while open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open]);
+
+  const [month, setMonth] = useState(() => startOfMonth(new Date()));
+
+  const [local, setLocal] = useState<string[]>([]);
+  // Only reset local selection when the modal opens (prevents infinite loops)
+  useEffect(() => {
+    if (open) setLocal(Array.from(new Set(initialDates)));
+  }, [open]); // intentionally NOT depending on initialDates
+
+  const localSet = useMemo(() => new Set(local), [local]);
+
+  // In renter mode, if owner provided specific days -> only those are allowed
+  const availableSet = useMemo(() => {
+    const arr = (availableDays ?? []).filter(Boolean);
+    return new Set(arr);
+  }, [availableDays]);
+
+  const hasOwnerRestrictions = mode === "renter" && (availableDays ?? []).filter(Boolean).length > 0;
+
+  const grid = useMemo(() => daysInMonthGrid(month), [month]);
+  const monthLabel = useMemo(() => {
+    const m = month.toLocaleString(undefined, { month: "long" });
+    return `${m} ${month.getFullYear()}`;
+  }, [month]);
+
+  function toggleDay(ymd: string, isAllowed: boolean) {
+    if (!isAllowed) return;
+    setLocal((prev) => {
+      const s = new Set(prev);
+      if (s.has(ymd)) s.delete(ymd);
+      else s.add(ymd);
+      return Array.from(s).sort();
+    });
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[9999]">
+      {/* backdrop */}
+      <div
+        className="absolute inset-0 bg-black/50"
+        onClick={onClose}
+      />
+
+      {/* modal */}
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-2xl overflow-hidden rounded-3xl bg-white shadow-2xl">
+          <div className="flex items-start justify-between gap-4 border-b border-slate-100 px-6 py-5">
+            <div className="min-w-0">
+              <div className="text-lg font-extrabold text-slate-900">
+                {title || (mode === "owner" ? "Set available dates" : "Select rental dates")}
+              </div>
+              <div className="mt-1 text-sm font-semibold text-slate-600">
+                {subtitle ||
+                  (mode === "owner"
+                    ? "Select the days your item is available. Leave blank = available anytime."
+                    : "Pick days you want. If you pick none, it still sends a request.")}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={onClose}
+              className="shrink-0 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              Close
+            </button>
+          </div>
+
+          <div className="px-6 py-5">
+            {/* month header */}
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => setMonth((m) => addMonths(m, -1))}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-extrabold text-slate-700 hover:bg-slate-50"
+              >
+                ←
+              </button>
+
+              <div className="text-sm font-extrabold text-slate-900">{monthLabel}</div>
+
+              <button
+                type="button"
+                onClick={() => setMonth((m) => addMonths(m, 1))}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-extrabold text-slate-700 hover:bg-slate-50"
+              >
+                →
+              </button>
+            </div>
+
+            {/* weekdays */}
+            <div className="mt-4 grid grid-cols-7 gap-2 text-center text-xs font-extrabold text-slate-500">
+              {["S","M","T","W","T","F","S"].map((d,i) => (
+                <div key={i}>{d}</div>
+              ))}
+            </div>
+
+            {/* day grid */}
+            <div className="mt-2 grid grid-cols-7 gap-2">
+              {grid.map((d) => {
+                const ymd = toYMD(d);
+                const inThisMonth = d.getMonth() === month.getMonth();
+
+                const isSelected = localSet.has(ymd);
+
+                // allowed logic
+                const isAllowed = !hasOwnerRestrictions || availableSet.has(ymd);
+
+                // styling:
+                // renter mode with restrictions:
+                // - available (allowed) but not selected => GREEN
+                // - not allowed => RED/disabled
+                // - selected => DARK (your pick)
+                let cls =
+                  "rounded-xl border px-0 py-2 text-sm font-extrabold transition select-none";
+
+                if (!inThisMonth) {
+                  cls += " border-slate-100 bg-slate-50 text-slate-300";
+                } else if (!isAllowed) {
+                  cls += " border-rose-200 bg-rose-50 text-rose-300 cursor-not-allowed";
+                } else if (isSelected) {
+                  cls += " border-slate-900 bg-slate-900 text-white";
+                } else if (mode === "renter" && hasOwnerRestrictions) {
+                  cls += " border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100";
+                } else {
+                  // owner mode OR renter anytime
+                  cls += " border-slate-200 bg-white text-slate-900 hover:bg-slate-50";
+                }
+
+                return (
+                  <button
+                    key={ymd}
+                    type="button"
+                    disabled={!inThisMonth || !isAllowed}
+                    onClick={() => toggleDay(ymd, inThisMonth && isAllowed)}
+                    className={cls}
+                    title={ymd}
+                  >
+                    {d.getDate()}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* footer */}
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setLocal([])}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-slate-700 hover:bg-slate-50"
+              >
+                Clear
+              </button>
+
+              <div className="flex items-center gap-2">
+                <div className="text-xs font-semibold text-slate-600">
+                  {local.length ? `${local.length} day(s) selected` : "No dates selected"}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (saveCb) saveCb(local);
+                    onClose();
+                  }}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-xs font-extrabold text-white hover:bg-slate-800"
+                >
+                  {primaryLabel || (mode === "owner" ? "Save" : "Send request")}
+                </button>
+              </div>
+            </div>
+
+            {/* legend (only when renter is restricted) */}
+            {mode === "renter" && hasOwnerRestrictions ? (
+              <div className="mt-4 flex flex-wrap items-center gap-3 text-xs font-semibold text-slate-600">
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-3 w-3 rounded bg-emerald-200" /> Available (owner)
+                </span>
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-3 w-3 rounded bg-rose-200" /> Unavailable
+                </span>
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-3 w-3 rounded bg-slate-900" /> Your selection
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

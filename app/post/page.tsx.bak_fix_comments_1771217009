@@ -1,0 +1,674 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { supabase } from "../../lib/supabaseClient";
+
+
+import AvailabilityEditor from "../../components/AvailabilityEditor";
+type ListingType = "sell" | "rent";
+type PriceType = "hour" | "day" | "week";
+type Condition = "brand_new" | "used" | "old";
+
+const CATEGORIES = [
+  "Tools",
+  "Electronics",
+  "Home",
+  "Yard",
+  "Auto",
+  "Sports",
+  "Clothing",
+  "Other",
+];
+
+const CONDITIONS: { key: Condition; label: string }[] = [
+  { key: "brand_new", label: "Brand New" },
+  { key: "used", label: "Used" },
+  { key: "old", label: "Old" },
+];
+
+// IMPORTANT: this must match your Supabase Storage bucket name used for item photos/videos.
+// If your bucket is different, change it here.
+const ITEM_MEDIA_BUCKET = "item-media";
+
+function onlyZip5(value: string) {
+  const digits = (value || "").replace(/\D/g, "");
+  return digits.slice(0, 5);
+}
+
+function formatMoneyInput(v: string) {
+  // keep digits + dot, prevent weird stuff
+  const cleaned = (v || "").replace(/[^\d.]/g, "");
+  // allow only one dot
+  const parts = cleaned.split(".");
+  if (parts.length <= 1) return cleaned;
+  return parts[0] + "." + parts.slice(1).join("").slice(0, 2);
+}
+
+export default function PostPage() {
+  const router = useRouter();
+
+  
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [availabilityDates, setAvailabilityDates] = useState<string[]>([]);
+const [viewerId, setViewerId] = useState<string | null>(null);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  // form
+  const [listingType, setListingType] = useState<ListingType>("sell");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [price, setPrice] = useState("25");
+  const [priceType, setPriceType] = useState<PriceType>("day");
+
+  const [zip, setZip] = useState("");
+  const [county, setCounty] = useState("");
+
+  const [category, setCategory] = useState<string>(CATEGORIES[0]);
+  const [condition, setCondition] = useState<Condition>("used");
+
+  // media
+  const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [videoFile, setVideoFile] = useState<File | null>(null);
+
+  // ui state
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const imgInputRef = useRef<HTMLInputElement | null>(null);
+  const vidInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      const id = data.session?.user?.id ?? null;
+      setViewerId(id);
+      setCheckingAuth(false);
+    })();
+  }, []);
+
+  const descCount = description.length;
+
+  const canSubmit = useMemo(() => {
+    if (!viewerId) return false;
+    if (!title.trim()) return false;
+    if (!description.trim()) return false;
+    const p = Number(price);
+    if (!Number.isFinite(p) || p <= 0) return false;
+    if (!/^\d{5}$/.test(zip)) return false;
+    if (!county.trim()) return false;
+    if (!category) return false;
+    if (!condition) return false;
+    return true;
+  }, [viewerId, title, description, price, zip, county, category, condition]);
+
+  function validate() {
+    const e: Record<string, string> = {};
+    if (!title.trim()) e.title = "Title is required";
+    if (!description.trim()) e.description = "Description is required";
+    const p = Number(price);
+    if (!Number.isFinite(p) || p <= 0) e.price = "Enter a valid price";
+    if (!/^\d{5}$/.test(zip)) e.zip = "Zip must be exactly 5 digits";
+    if (!county.trim()) e.county = "County is required";
+    if (!category) e.category = "Pick a category";
+    if (!condition) e.condition = "Pick a condition";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  async function uploadOne(path: string, file: File) {
+    const { error } = await supabase.storage
+      .from(ITEM_MEDIA_BUCKET)
+      .upload(path, file, { upsert: true, cacheControl: "3600" });
+
+    if (error) throw error;
+
+    const { data } = supabase.storage.from(ITEM_MEDIA_BUCKET).getPublicUrl(path);
+    return data.publicUrl;
+  }
+
+  async function handleSubmit() {
+    setMessage(null);
+    if (!viewerId) {
+      router.push("/login");
+      return;
+    }
+    if (!validate()) return;
+
+    setSubmitting(true);
+    try {
+      // 1) create item row first (so we have an item_id)
+      const payload: any = {
+        owner_id: viewerId,
+        title: title.trim(),
+        description: description.trim(),
+        listing_type: listingType,
+        price: Number(price),
+        price_type: listingType === "rent" ? priceType : "day",
+        category,
+        condition,
+        zip,
+        county: county.trim(),
+        status: "available",
+      };
+
+      const { data: created, error: createErr } = await supabase
+        .from("items")
+        .insert(payload)
+        .select("id")
+        .single();
+
+      if (createErr || !created?.id) {
+        throw createErr ?? new Error("Could not create item");
+      }
+
+      const itemId = created.id as string;
+
+      // 2) upload media (if any)
+      const uploadedImages: string[] = [];
+      for (let i = 0; i < imageFiles.length; i++) {
+        const f = imageFiles[i];
+        const ext = (f.name.split(".").pop() || "jpg").toLowerCase();
+        const safeExt = ext.replace(/[^a-z0-9]/g, "") || "jpg";
+        const path = `items/${itemId}/image_${i + 1}.${safeExt}`;
+        const url = await uploadOne(path, f);
+        uploadedImages.push(url);
+      }
+
+      let uploadedVideoUrl: string | null = null;
+      if (videoFile) {
+        const ext = (videoFile.name.split(".").pop() || "mp4").toLowerCase();
+        const safeExt = ext.replace(/[^a-z0-9]/g, "") || "mp4";
+        const path = `items/${itemId}/video.${safeExt}`;
+        uploadedVideoUrl = await uploadOne(path, videoFile);
+      }
+
+      // 3) update item row with media urls (only if we actually uploaded)
+      if (uploadedImages.length || uploadedVideoUrl) {
+        const { error: upErr } = await supabase
+          .from("items")
+          .update({
+            image_urls: uploadedImages.length ? uploadedImages : null,
+            video_url: uploadedVideoUrl,
+          })
+          .eq("id", itemId);
+
+        if (upErr) throw upErr;
+      }
+
+      setMessage("✅ Posted! Taking you to your item…");
+      // small delay so you see success message
+      setTimeout(() => {
+        router.push(`/items/${itemId}`);
+      }, 350);
+    } catch (err: any) {
+      setMessage(`❌ ${err?.message || "Something went wrong"}`);
+      setSubmitting(false);
+      return;
+    }
+
+    setSubmitting(false);
+  }
+
+  if (checkingAuth) {
+    return (
+      <main className="min-h-[70vh] px-4 pb-24 pt-8">
+        <div className="mx-auto max-w-2xl rounded-3xl border border-slate-200 bg-white/70 p-6 shadow-sm backdrop-blur">
+          <div className="text-sm font-semibold text-slate-700">Loading…</div>
+        </div>
+      
+      {/* AVAILABILITY_MODAL */}
+      <AvailabilityEditor
+        open={showCalendar}
+        onClose={() => setShowCalendar(false)}
+        initialDates={availabilityDates}
+        onSave={(dates) => setAvailabilityDates(dates)}
+        title="Set available dates"
+      />
+
+    </main>
+  );
+
+  }
+
+  if (!viewerId) {
+    return (
+      <main className="min-h-[70vh] px-4 pb-24 pt-10">
+        <div className="mx-auto max-w-2xl rounded-3xl border border-slate-200 bg-white/70 p-8 shadow-sm backdrop-blur">
+          <div className="text-xl font-extrabold tracking-tight text-slate-900">
+            Sign in to post
+          </div>
+          <p className="mt-2 text-sm text-slate-600">
+            You need an account to list items.
+          </p>
+          <button
+            onClick={() => router.push("/login")}
+            className="mt-5 w-full rounded-2xl bg-slate-900 px-5 py-4 text-sm font-semibold text-white shadow-lg shadow-slate-900/20"
+          >
+            Go to Login
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="px-4 pb-28 pt-6">
+      <div className="mx-auto max-w-2xl">
+        {/* Header (Rork-ish) */}
+        <div className="mb-5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-lg shadow-slate-900/20">
+              <span className="text-lg font-extrabold">R</span>
+            </div>
+            <div>
+              <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+                Create Listing
+              </h1>
+              <p className="text-sm text-slate-600">
+                Post for sale or rent — clean & simple.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Sell / Rent toggle */}
+        <div className="mb-5 rounded-3xl border border-slate-200 bg-white/80 p-2 shadow-sm backdrop-blur">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setListingType("sell")}
+              className={[
+                "flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold transition",
+                listingType === "sell"
+                  ? "bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+                  : "bg-slate-100 text-slate-700",
+              ].join(" ")}
+            >
+              Sell
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setListingType("rent")}
+              className={[
+                "flex items-center justify-center gap-2 rounded-2xl px-4 py-4 text-sm font-bold transition",
+                listingType === "rent"
+                  ? "bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+                  : "bg-slate-100 text-slate-700",
+              ].join(" ")}
+            >
+              Rent
+            </button>
+          </div>
+        </div>
+
+        {/* Message */}
+        {message ? (
+          <div className="mb-5 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm backdrop-blur">
+            {message}
+          </div>
+        ) : null}
+
+        {/* Card: Item details */}
+        <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-1 text-base font-extrabold text-slate-900">
+            Item details
+          </div>
+          <div className="mb-4 text-sm text-slate-600">
+            Make it clear — better titles sell faster.
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                Title
+              </div>
+              <input
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                className={[
+                  "w-full rounded-2xl border px-4 py-4 text-sm text-slate-900 outline-none placeholder:text-slate-400",
+                  errors.title ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50",
+                ].join(" ")}
+                placeholder="e.g. Dewalt Drill Kit"
+              />
+              {errors.title ? (
+                <div className="mt-2 text-sm font-semibold text-rose-600">
+                  {errors.title}
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                Description
+              </div>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className={[
+                  "w-full rounded-2xl border px-4 py-4 text-sm text-slate-900 outline-none placeholder:text-slate-400",
+                  "min-h-[120px]",
+                  errors.description ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50",
+                ].join(" ")}
+                placeholder="Condition, pickup details, what’s included…"
+              />
+              <div className="mt-2 text-right text-xs font-semibold text-slate-500">
+                {descCount}/500
+              </div>
+              {errors.description ? (
+                <div className="mt-2 text-sm font-semibold text-rose-600">
+                  {errors.description}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        {/* Card: Pricing */}
+        <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-4 text-base font-extrabold text-slate-900">
+            Pricing
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                Price
+              </div>
+              <input
+                value={price}
+                onChange={(e) => setPrice(formatMoneyInput(e.target.value))}
+                className={[
+                  "w-full rounded-2xl border px-4 py-4 text-sm text-slate-900 outline-none placeholder:text-slate-400",
+                  errors.price ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50",
+                ].join(" ")}
+                placeholder="25"
+                inputMode="decimal"
+              />
+              {errors.price ? (
+                <div className="mt-2 text-sm font-semibold text-rose-600">
+                  {errors.price}
+                </div>
+              ) : null}
+            </div>
+
+            {listingType === "rent" ? (
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">
+                  Rate type
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {(["hour", "day", "week"] as PriceType[]).map((pt) => (
+                    <button
+                      key={pt}
+                      type="button"
+                      onClick={() => setPriceType(pt)}
+                      className={[
+                        "rounded-2xl border px-3 py-4 text-sm font-bold transition",
+                        priceType === pt
+                          ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+                          : "border-slate-200 bg-slate-50 text-slate-700",
+                      ].join(" ")}
+                    >
+                      {pt === "hour" ? "Hour" : pt === "day" ? "Day" : "Week"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">
+                  Type
+                </div>
+                <div className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-semibold text-slate-700">
+                  For sale
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* Card: Location */}
+        <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-4 text-base font-extrabold text-slate-900">
+            Location
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                Zip code
+              </div>
+              <input
+                value={zip}
+                onChange={(e) => setZip(onlyZip5(e.target.value))}
+                className={[
+                  "w-full rounded-2xl border px-4 py-4 text-sm text-slate-900 outline-none placeholder:text-slate-400",
+                  errors.zip ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50",
+                ].join(" ")}
+                placeholder="30318"
+                inputMode="numeric"
+              />
+              <div className="mt-2 text-xs font-semibold text-slate-500">
+                Exactly 5 digits.
+              </div>
+              {errors.zip ? (
+                <div className="mt-2 text-sm font-semibold text-rose-600">
+                  {errors.zip}
+                </div>
+              ) : null}
+            </div>
+
+            <div>
+              <div className="mb-2 text-sm font-semibold text-slate-900">
+                County
+              </div>
+              <input
+                value={county}
+                onChange={(e) => setCounty(e.target.value)}
+                className={[
+                  "w-full rounded-2xl border px-4 py-4 text-sm text-slate-900 outline-none placeholder:text-slate-400",
+                  errors.county ? "border-rose-300 bg-rose-50" : "border-slate-200 bg-slate-50",
+                ].join(" ")}
+                placeholder="Fulton"
+              />
+              {errors.county ? (
+                <div className="mt-2 text-sm font-semibold text-rose-600">
+                  {errors.county}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </section>
+
+        {/* Card: Category */}
+        <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-4 text-base font-extrabold text-slate-900">
+            Category
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {CATEGORIES.map((c) => {
+              const active = category === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCategory(c)}
+                  className={[
+                    "rounded-full border px-4 py-3 text-sm font-bold transition",
+                    active
+                      ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/15"
+                      : "border-slate-200 bg-slate-50 text-slate-700",
+                  ].join(" ")}
+                >
+                  {c}
+                </button>
+              );
+            })}
+          </div>
+
+          {errors.category ? (
+            <div className="mt-3 text-sm font-semibold text-rose-600">
+              {errors.category}
+            </div>
+          ) : null}
+        </section>
+
+        {/* Card: Condition */}
+        <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-4 text-base font-extrabold text-slate-900">
+            Condition
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {CONDITIONS.map((c) => {
+              const active = condition === c.key;
+              return (
+                <button
+                  key={c.key}
+                  type="button"
+                  onClick={() => setCondition(c.key)}
+                  className={[
+                    "rounded-2xl border px-4 py-4 text-sm font-extrabold transition",
+                    active
+                      ? "border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-900/20"
+                      : "border-slate-200 bg-slate-50 text-slate-700",
+                  ].join(" ")}
+                >
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {errors.condition ? (
+            <div className="mt-3 text-sm font-semibold text-rose-600">
+              {errors.condition}
+            </div>
+          ) : null}
+        </section>
+
+        {/* AVAILABILITY_SECTION */}
+        {listingType === "rent" ? (
+          <section className="mb-4 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="text-base font-extrabold text-slate-900">Availability</div>
+                <div className="text-sm font-semibold text-slate-600">
+                  {availabilityDates.length
+                    ? `${availabilityDates.length} day(s) selected`
+                    : "No dates selected = available anytime"}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowCalendar(true)}
+                className="relative z-50 rounded-2xl bg-slate-900 px-4 py-3 text-sm font-extrabold text-white shadow-lg shadow-slate-900/20 active:scale-[0.99]"
+              >
+                Set available dates
+              </button>
+            </div>
+          </section>
+        ) : null}
+        {{/* Card: Media (THIS FIXES your complaint: media on first post) */}
+<section className="mb-5 rounded-3xl border border-slate-200 bg-white/85 p-5 shadow-sm backdrop-blur">
+          <div className="mb-1 text-base font-extrabold text-slate-900">
+            Photos & video
+          </div>
+          <div className="mb-4 text-sm text-slate-600">
+            Add pictures now (not just on edit).
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => imgInputRef.current?.click()}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-bold text-slate-900"
+              >
+                Add photos ({imageFiles.length})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => vidInputRef.current?.click()}
+                className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm font-bold text-slate-900"
+              >
+                {videoFile ? "Video selected ✅" : "Add a video (optional)"}
+              </button>
+            </div>
+
+            <input
+              ref={imgInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files || []);
+                setImageFiles(files.slice(0, 6)); // keep it reasonable
+              }}
+            />
+
+            <input
+              ref={vidInputRef}
+              type="file"
+              accept="video/*"
+              className="hidden"
+              onChange={(e) => {
+                const file = (e.target.files || [])[0] || null;
+                setVideoFile(file);
+              }}
+            />
+
+            {imageFiles.length ? (
+              <div className="text-sm font-semibold text-slate-700">
+                Photos ready:{" "}
+                <span className="font-extrabold text-slate-900">
+                  {imageFiles.length}
+                </span>
+              </div>
+            ) : null}
+
+            {videoFile ? (
+              <div className="text-sm font-semibold text-slate-700">
+                Video:{" "}
+                <span className="font-extrabold text-slate-900">
+                  {videoFile.name}
+                </span>
+              </div>
+            ) : null}
+
+            <div className="text-xs font-semibold text-slate-500">
+              Tip: Photos make the demo feel way more real.
+            </div>
+          </div>
+        </section>
+
+        {/* Submit */}
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={!canSubmit || submitting}
+          className={[
+            "w-full rounded-3xl px-5 py-5 text-base font-extrabold text-white",
+            "shadow-xl shadow-slate-900/25 transition",
+            !canSubmit || submitting
+              ? "bg-slate-400"
+              : "bg-slate-900 hover:translate-y-[-1px]",
+          ].join(" ")}
+        >
+          {submitting ? "Posting…" : listingType === "sell" ? "Post for Sale" : "Post for Rent"}
+        </button>
+
+        <div className="h-10" />
+      </div>
+    </main>
+  );
+}
