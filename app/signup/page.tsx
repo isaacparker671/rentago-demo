@@ -2,14 +2,18 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { signUp } from "../../lib/authClient";
+import { useRouter } from "next/navigation";
+import { signIn, signUp } from "../../lib/authClient";
 import { supabase } from "../../lib/supabaseClient";
 
 export default function SignupPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [zip, setZip] = useState("");
   const [county, setCounty] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -27,6 +31,11 @@ export default function SignupPage() {
     }
     if (!countyClean) {
       setMsg("County is required.");
+      setLoading(false);
+      return;
+    }
+    if (password !== confirmPassword) {
+      setMsg("Passwords do not match.");
       setLoading(false);
       return;
     }
@@ -53,7 +62,16 @@ export default function SignupPage() {
         );
     }
 
-    setMsg("Account created. Now log in.");
+    // Auto sign in immediately after successful sign up.
+    const login = await signIn(email.trim(), password);
+    if (login.error) {
+      setMsg("Account created, but auto sign-in failed. Please log in.");
+      setLoading(false);
+      return;
+    }
+
+    router.push("/profile");
+    router.refresh();
     setLoading(false);
   }
 
@@ -75,16 +93,46 @@ export default function SignupPage() {
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <input
-            className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
-            placeholder="Password (min 6 chars)"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            minLength={6}
-            required
-          />
+          <div className="relative">
+            <input
+              className="w-full rounded-xl border border-slate-200 px-3 py-3 pr-10 text-sm outline-none focus:border-sky-400 text-black placeholder: text-slate-900 placeholder:text-slate-400"
+              placeholder="Password (min 6 chars)"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              minLength={6}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute inset-y-0 right-2 my-auto h-8 rounded-lg px-2 text-xs font-extrabold text-slate-600 hover:bg-slate-100"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
+          <div className="relative">
+            <input
+              className="w-full rounded-xl border border-slate-200 px-3 py-3 pr-10 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
+              placeholder="Confirm password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              minLength={6}
+              required
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute inset-y-0 right-2 my-auto h-8 rounded-lg px-2 text-xs font-extrabold text-slate-600 hover:bg-slate-100"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? "Hide" : "Show"}
+            </button>
+          </div>
           <input
             className="w-full rounded-xl border border-slate-200 px-3 py-3 text-sm outline-none focus:border-sky-400 text-black placeholder:text-slate-400"
             placeholder="ZIP code"
