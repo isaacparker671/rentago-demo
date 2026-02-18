@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
 import { cx, rCard, rCardPad, rH1, rSub } from "../../components/ui/ui";
-import { isConversationUnread, readHiddenChats } from "../../lib/messageState";
+import { computeUnreadCounts, readHiddenChats } from "../../lib/messageState";
 
 type ConversationRow = {
   id: string;
@@ -46,7 +46,7 @@ export default function MessagesPage() {
   const [convos, setConvos] = useState<ConversationRow[]>([]);
   const [profiles, setProfiles] = useState<Record<string, ProfileMini>>({});
   const [items, setItems] = useState<Record<string, ItemMini>>({});
-  const [unreadConvoIds, setUnreadConvoIds] = useState<Set<string>>(new Set());
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [refreshTick, setRefreshTick] = useState(0);
 
@@ -70,13 +70,23 @@ export default function MessagesPage() {
       const hidden = readHiddenChats(uid);
       const list = ((rows as ConversationRow[]) || []).filter((row) => !hidden.has(row.id));
       setConvos(list);
-      setUnreadConvoIds(
-        new Set(
-          list
-            .filter((c) => isConversationUnread(uid, c.id, c.last_message_at))
-            .map((c) => c.id)
-        )
-      );
+
+      const convoIds = list.map((c) => c.id);
+      if (convoIds.length) {
+        const { data: msgRows } = await supabase
+          .from("messages")
+          .select("conversation_id,sender_id,created_at")
+          .in("conversation_id", convoIds);
+        setUnreadCounts(
+          computeUnreadCounts(
+            uid,
+            list.map((c) => ({ id: c.id })),
+            ((msgRows as Array<{ conversation_id: string; sender_id: string; created_at: string | null }> | null) ?? [])
+          )
+        );
+      } else {
+        setUnreadCounts({});
+      }
 
       const otherIds = Array.from(
         new Set(list.map((c) => (c.user_a === uid ? c.user_b : c.user_a)).filter(Boolean))
@@ -118,12 +128,29 @@ export default function MessagesPage() {
         { event: "*", schema: "public", table: "conversations" },
         () => setRefreshTick((x) => x + 1)
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "messages" },
+        () => setRefreshTick((x) => x + 1)
+      )
       .subscribe();
 
     return () => {
       void supabase.removeChannel(channel);
     };
   }, [viewerId]);
+
+  useEffect(() => {
+    const onUnreadChanged = () => setRefreshTick((x) => x + 1);
+    if (typeof window !== "undefined") {
+      window.addEventListener("rentago:unread-changed", onUnreadChanged);
+    }
+    return () => {
+      if (typeof window !== "undefined") {
+        window.removeEventListener("rentago:unread-changed", onUnreadChanged);
+      }
+    };
+  }, []);
 
   const list = useMemo(() => {
     if (!viewerId) return [];
@@ -182,7 +209,7 @@ export default function MessagesPage() {
               const avatar = profile?.avatar_url || null;
               const subtitle = item?.title ? `Re: ${item.title}` : "Direct message";
               const when = niceDate(c.last_message_at);
-              const isUnread = unreadConvoIds.has(c.id);
+              const unreadCount = unreadCounts[c.id] || 0;
 
               return (
                 <div
@@ -229,7 +256,11 @@ export default function MessagesPage() {
                           {name}
                         </div>
                         <div className="flex items-center gap-2">
-                          {isUnread ? <span className="h-2.5 w-2.5 rounded-full bg-rose-500" /> : null}
+                          {unreadCount > 0 ? (
+                            <span className="inline-flex min-w-[1.1rem] items-center justify-center rounded-full bg-rose-500 px-1.5 py-0.5 text-[10px] font-extrabold text-white">
+                              {unreadCount}
+                            </span>
+                          ) : null}
                           <div className="text-xs font-semibold text-slate-500">{when}</div>
                         </div>
                       </div>

@@ -392,9 +392,9 @@ export default function PublicProfilePage() {
               <Link
                 key={it.id}
                 href={`/items/${it.id}`}
-                className="group block overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.99]"
+                className="group flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/70 bg-white/70 shadow-sm backdrop-blur transition hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.99]"
               >
-                <div className="relative aspect-[16/11] w-full bg-slate-50">
+                <div className="relative aspect-[16/11] w-full flex-none bg-slate-50">
                   {hero ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={hero} alt={it.title} className="h-full w-full object-cover" />
@@ -430,8 +430,8 @@ export default function PublicProfilePage() {
                   </div>
                 </div>
 
-                <div className="p-4">
-                  <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-1 flex-col p-4">
+                  <div className="mt-auto flex items-center justify-between gap-3">
                     <div className="truncate text-xs font-semibold text-slate-600">
                       {it.category} • {conditionLabel(it.condition)}
                     </div>

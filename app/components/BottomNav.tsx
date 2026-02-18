@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { supabase } from "../../lib/supabaseClient";
-import { isConversationUnread, readHiddenChats } from "../../lib/messageState";
+import { computeUnreadCounts, readHiddenChats } from "../../lib/messageState";
 
 function cx(...xs: Array<string | false | null | undefined>) {
   return xs.filter(Boolean).join(" ");
@@ -41,7 +41,7 @@ export default function BottomNav() {
   const pathname = usePathname() || "/";
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [profileInitial, setProfileInitial] = useState("U");
-  const [hasUnreadMessages, setHasUnreadMessages] = useState(false);
+  const [unreadTotal, setUnreadTotal] = useState(0);
 
   useEffect(() => {
     let uidForSub: string | null = null;
@@ -54,7 +54,24 @@ export default function BottomNav() {
       const hidden = readHiddenChats(uid);
       const list = ((rows as Array<{ id: string; last_message_at: string | null }> | null) ?? [])
         .filter((r) => !hidden.has(r.id));
-      setHasUnreadMessages(list.some((r) => isConversationUnread(uid, r.id, r.last_message_at)));
+
+      const convoIds = list.map((c) => c.id);
+      if (!convoIds.length) {
+        setUnreadTotal(0);
+        return;
+      }
+
+      const { data: msgRows } = await supabase
+        .from("messages")
+        .select("conversation_id,sender_id,created_at")
+        .in("conversation_id", convoIds);
+
+      const counts = computeUnreadCounts(
+        uid,
+        list.map((c) => ({ id: c.id })),
+        ((msgRows as Array<{ conversation_id: string; sender_id: string; created_at: string | null }> | null) ?? [])
+      );
+      setUnreadTotal(Object.values(counts).reduce((a, b) => a + b, 0));
     }
 
     async function loadMyAvatar() {
@@ -64,7 +81,7 @@ export default function BottomNav() {
       if (!uid) {
         setAvatarUrl(null);
         setProfileInitial("U");
-        setHasUnreadMessages(false);
+        setUnreadTotal(0);
         return;
       }
 
@@ -91,8 +108,18 @@ export default function BottomNav() {
       )
       .subscribe();
 
+    const onUnreadChanged = () => {
+      if (uidForSub) void refreshUnread(uidForSub);
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("rentago:unread-changed", onUnreadChanged);
+    }
+
     return () => {
       void supabase.removeChannel(channel);
+      if (typeof window !== "undefined") {
+        window.removeEventListener("rentago:unread-changed", onUnreadChanged);
+      }
     };
   }, [pathname]);
 
@@ -118,8 +145,10 @@ export default function BottomNav() {
                     <rect x="3.5" y="6.5" width="17" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
                     <path d="M5 8l7 5 7-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                   </svg>
-                  {hasUnreadMessages ? (
-                    <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-white" />
+                  {unreadTotal > 0 ? (
+                    <span className="absolute -right-2 -top-2 inline-flex min-w-[1rem] items-center justify-center rounded-full bg-rose-500 px-1 py-0.5 text-[9px] font-extrabold leading-none text-white ring-2 ring-white">
+                      {unreadTotal > 99 ? "99+" : unreadTotal}
+                    </span>
                   ) : null}
                 </span>
               }

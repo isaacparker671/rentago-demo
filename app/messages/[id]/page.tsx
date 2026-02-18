@@ -4,7 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabaseClient";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { hiddenChatsKey, markConversationRead, readHiddenChats } from "../../../lib/messageState";
+import {
+  emitUnreadChanged,
+  hiddenChatsKey,
+  markConversationRead,
+  readHiddenChats,
+} from "../../../lib/messageState";
 
 type Conversation = {
   id: string;
@@ -81,6 +86,7 @@ export default function ChatPage() {
     const lastAt = list[list.length - 1]?.created_at;
     if (viewerId && convoId && lastAt) {
       markConversationRead(viewerId, convoId, lastAt);
+      emitUnreadChanged();
     }
   }, [convoId, viewerId]);
 
@@ -187,6 +193,14 @@ export default function ChatPage() {
   }, [convoId, reloadMessages]);
 
   useEffect(() => {
+    if (!convoId) return;
+    const timer = window.setInterval(() => {
+      void reloadMessages();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [convoId, reloadMessages]);
+
+  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [msgs.length]);
 
@@ -196,6 +210,15 @@ export default function ChatPage() {
     if (!body) return;
 
     setText("");
+    setMsgs((prev) => [
+      ...prev,
+      {
+        id: `tmp-${Date.now()}`,
+        sender_id: viewerId,
+        body,
+        created_at: new Date().toISOString(),
+      },
+    ]);
 
     const { error } = await supabase.from("messages").insert({
       conversation_id: convoId,
@@ -209,6 +232,8 @@ export default function ChatPage() {
         .update({ last_message_at: new Date().toISOString() })
         .eq("id", convoId);
 
+      await reloadMessages();
+    } else {
       await reloadMessages();
     }
   }
@@ -224,6 +249,7 @@ export default function ChatPage() {
 
     setDeletingChat(true);
     hideChatForUser(viewerId, convo.id);
+    emitUnreadChanged();
     setDeletingChat(false);
     router.push("/messages");
     router.refresh();
